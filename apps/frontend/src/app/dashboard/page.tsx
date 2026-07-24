@@ -1,0 +1,347 @@
+'use client';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { fetchSymbols, deleteSymbol } from '@/services/api';
+import { fetchMultiple24hrTickers } from '@/services/binance-rest';
+import { binanceTickerWS, TickerData } from '@/services/binance-ws';
+import { socket } from '@/services/socket';
+import AddSymbolModal from '@/components/watchlist/AddSymbolModal';
+import PriceFlash from '@/components/ui/PriceFlash';
+import PerformanceDashboard from '@/components/monitoring/PerformanceDashboard';
+import RealTimePnL from '@/components/monitoring/RealTimePnL';
+import MlPredictionDisplay from '@/components/monitoring/MlPredictionDisplay';
+import SystemHealthMonitor from '@/components/monitoring/SystemHealthMonitor';
+import EmergencyCircuitBreaker from '@/components/emergency/EmergencyCircuitBreaker';
+import NotificationCenter from '@/components/notifications/NotificationCenter';
+import Link from 'next/link';
+import {
+  Trash2, TrendingUp, TrendingDown, Minus, ExternalLink, Shield,
+  BarChart3, Brain, Activity, Bell, ArrowRight, Zap, AlertTriangle
+} from 'lucide-react';
+
+interface SymbolItem {
+  id: string;
+  symbol: string;
+  isActive: boolean;
+}
+
+interface TickerMap {
+  [symbol: string]: TickerData;
+}
+
+function formatPrice(price: number): string {
+  if (!Number.isFinite(price) || price === 0) return '0.00';
+  if (price >= 1000) return price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (price >= 1) return price.toFixed(4);
+  if (price >= 0.01) return price.toFixed(6);
+  return price.toFixed(8);
+}
+
+function formatVolume(volume: number): string {
+  if (!Number.isFinite(volume) || volume === 0) return '0.00';
+  if (volume >= 1_000_000_000) return `${(volume / 1_000_000_000).toFixed(2)}B`;
+  if (volume >= 1_000_000) return `${(volume / 1_000_000).toFixed(2)}M`;
+  if (volume >= 1_000) return `${(volume / 1_000).toFixed(2)}K`;
+  return volume.toFixed(2);
+}
+
+function formatMarketCap(quoteVolume: number, lastPrice: number): string {
+  if (!Number.isFinite(quoteVolume) || quoteVolume === 0 || !Number.isFinite(lastPrice)) return '--';
+  const cap = quoteVolume * 2;
+  if (cap >= 1_000_000_000_000) return `$${(cap / 1_000_000_000_000).toFixed(2)}T`;
+  if (cap >= 1_000_000_000) return `$${(cap / 1_000_000_000).toFixed(2)}B`;
+  if (cap >= 1_000_000) return `$${(cap / 1_000_000).toFixed(2)}M`;
+  return `$${cap.toFixed(0)}`;
+}
+
+function getCryptoIconUrl(symbol: string): string {
+  const base = symbol.replace('USDT', '').toLowerCase();
+  return `https://assets.coincap.io/assets/icons/${base}@2x.png`;
+}
+
+const QUICK_ACTIONS = [
+  { href: '/dashboard/risk', label: 'Risk Management', icon: Shield, desc: 'Configure risk parameters', color: 'text-amber-400', bg: 'bg-amber-500/10' },
+  { href: '/dashboard/performance', label: 'Performance', icon: BarChart3, desc: 'View trading metrics', color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
+  { href: '/dashboard/ml-models', label: 'ML Models', icon: Brain, desc: 'AI predictions & models', color: 'text-purple-400', bg: 'bg-purple-500/10' },
+  { href: '/dashboard/notifications', label: 'Notifications', icon: Bell, desc: 'Alerts & rules', color: 'text-sky-400', bg: 'bg-sky-500/10' },
+  { href: '/dashboard/health', label: 'System Health', icon: Activity, desc: 'Service status', color: 'text-slate-400', bg: 'bg-slate-500/10' },
+];
+
+export default function DashboardPage() {
+  const [symbols, setSymbols] = useState<SymbolItem[]>([]);
+  const [tickers, setTickers] = useState<TickerMap>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const unsubRef = useRef<(() => void) | null>(null);
+  const [activeTab, setActiveTab] = useState<'watchlist' | 'overview'>('overview');
+
+  const loadData = useCallback(async () => {
+    try {
+      const data = await fetchSymbols();
+      setSymbols(data);
+      return data;
+    } catch (err) {
+      console.error(err);
+      return [];
+    }
+  }, []);
+
+  useEffect(() => {
+    const init = async () => {
+      setLoading(true);
+      const data = await loadData();
+      if (data.length > 0) {
+        try {
+          const symbolsList = data.map((s: SymbolItem) => s.symbol);
+          const tickerData = await fetchMultiple24hrTickers(symbolsList);
+          const tickerMap: TickerMap = {};
+          tickerData.forEach((t: any) => {
+            tickerMap[t.s] = {
+              symbol: t.s,
+              lastPrice: parseFloat(t.c),
+              priceChange: parseFloat(t.p),
+              priceChangePercent: parseFloat(t.P),
+              high24h: parseFloat(t.h),
+              low24h: parseFloat(t.l),
+              volume24h: parseFloat(t.v),
+              quoteVolume24h: parseFloat(t.q),
+            };
+          });
+          setTickers(tickerMap);
+        } catch (err) {
+          console.error('Failed to fetch initial tickers:', err);
+        }
+      }
+      setLoading(false);
+    };
+    init();
+  }, [loadData]);
+
+  useEffect(() => {
+    const handleTicker = (ticker: TickerData) => {
+      setTickers((prev) => ({ ...prev, [ticker.symbol]: ticker }));
+    };
+    const unsubFunctions: (() => void)[] = [];
+    symbols.forEach((item) => {
+      const unsub = binanceTickerWS.subscribe(item.symbol, handleTicker);
+      unsubFunctions.push(unsub);
+    });
+    binanceTickerWS.connect();
+    return () => {
+      unsubFunctions.forEach((fn) => fn());
+    };
+  }, [symbols]);
+
+  useEffect(() => {
+    socket.on('candle_tick', (data: { symbol: string; close: number }) => {
+      setTickers((prev) => {
+        const existing = prev[data.symbol];
+        if (existing) {
+          return { ...prev, [data.symbol]: { ...existing, lastPrice: data.close } };
+        }
+        return prev;
+      });
+    });
+    return () => { socket.off('candle_tick'); };
+  }, []);
+
+  const handleDelete = async (id: string) => {
+    if (confirm('Hapus koin ini dari pantauan?')) {
+      await deleteSymbol(id);
+      loadData();
+    }
+  };
+
+  const getChangeIcon = (changePercent: number) => {
+    if (changePercent > 0) return <TrendingUp className="w-3 h-3" />;
+    if (changePercent < 0) return <TrendingDown className="w-3 h-3" />;
+    return <Minus className="w-3 h-3" />;
+  };
+
+  return (
+    <div className="min-h-screen bg-[#0a0a0f] text-slate-100">
+      {/* Header */}
+      <div className="sticky top-0 z-10 bg-[#0a0a0f]/95 backdrop-blur-sm border-b border-slate-800/50">
+        <div className="px-4 lg:px-6 py-3 flex items-center justify-between">
+          <div>
+            <h1 className="text-base lg:text-lg font-semibold text-white tracking-tight">Dashboard</h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {symbols.length} {symbols.length === 1 ? 'symbol' : 'symbols'} monitored
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex gap-1 bg-slate-900 rounded-lg p-0.5 border border-slate-800">
+              <button
+                onClick={() => setActiveTab('overview')}
+                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                  activeTab === 'overview' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Overview
+              </button>
+              <button
+                onClick={() => setActiveTab('watchlist')}
+                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                  activeTab === 'watchlist' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Watchlist
+              </button>
+            </div>
+            <AddSymbolModal onAdded={loadData} />
+          </div>
+        </div>
+      </div>
+
+      <div className="px-4 lg:px-6 py-4 space-y-6">
+        {activeTab === 'overview' ? (
+          <>
+            {/* Quick Actions */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+              {QUICK_ACTIONS.map((action) => {
+                const Icon = action.icon;
+                return (
+                  <Link
+                    key={action.href}
+                    href={action.href}
+                    className="bg-slate-900/50 border border-slate-800/50 rounded-xl p-3 hover:bg-slate-800/50 transition-colors group"
+                  >
+                    <div className={`w-8 h-8 rounded-lg ${action.bg} flex items-center justify-center mb-2`}>
+                      <Icon className={`w-4 h-4 ${action.color}`} />
+                    </div>
+                    <p className="text-xs font-medium text-white group-hover:text-emerald-400 transition-colors">{action.label}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">{action.desc}</p>
+                  </Link>
+                );
+              })}
+            </div>
+
+            {/* Main Dashboard Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="lg:col-span-2 space-y-6">
+                <PerformanceDashboard />
+                <RealTimePnL />
+              </div>
+              <div className="space-y-6">
+                <MlPredictionDisplay />
+                <SystemHealthMonitor />
+                <EmergencyCircuitBreaker />
+              </div>
+            </div>
+          </>
+        ) : (
+          /* Watchlist Table */
+          <div className="overflow-x-auto custom-scrollbar">
+            {loading ? (
+              <div className="flex items-center justify-center py-20">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                  <p className="text-xs text-slate-500">Memuat data...</p>
+                </div>
+              </div>
+            ) : error ? (
+              <div className="flex items-center justify-center py-20">
+                <p className="text-xs text-red-400">{error}</p>
+              </div>
+            ) : symbols.length === 0 ? (
+              <div className="flex items-center justify-center py-20">
+                <div className="text-center">
+                  <p className="text-sm text-slate-500 mb-2">Belum ada simbol yang dipantau</p>
+                  <p className="text-xs text-slate-600">Klik tombol "+ Tambah Koin" untuk mulai memantau</p>
+                </div>
+              </div>
+            ) : (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800/50">
+                    <th className="text-left py-3 pr-4 text-slate-500 font-medium text-[11px] uppercase tracking-wider">Simbol</th>
+                    <th className="text-right py-3 px-4 text-slate-500 font-medium text-[11px] uppercase tracking-wider">Harga Terkini</th>
+                    <th className="text-right py-3 px-4 text-slate-500 font-medium text-[11px] uppercase tracking-wider">24j Perubahan</th>
+                    <th className="text-right py-3 px-4 text-slate-500 font-medium text-[11px] uppercase tracking-wider">Volume 24j</th>
+                    <th className="text-right py-3 px-4 text-slate-500 font-medium text-[11px] uppercase tracking-wider">High 24j</th>
+                    <th className="text-right py-3 px-4 text-slate-500 font-medium text-[11px] uppercase tracking-wider">Low 24j</th>
+                    <th className="text-right py-3 px-4 text-slate-500 font-medium text-[11px] uppercase tracking-wider">Market Cap</th>
+                    <th className="text-right py-3 pl-4 text-slate-500 font-medium text-[11px] uppercase tracking-wider">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {symbols.map((item) => {
+                    const ticker = tickers[item.symbol];
+                    const lastPrice = ticker?.lastPrice ?? 0;
+                    const priceChange = ticker?.priceChange ?? 0;
+                    const priceChangePercent = ticker?.priceChangePercent ?? 0;
+                    const high24h = ticker?.high24h ?? 0;
+                    const low24h = ticker?.low24h ?? 0;
+                    const volume24h = ticker?.volume24h ?? 0;
+                    const quoteVolume24h = ticker?.quoteVolume24h ?? 0;
+                    const isPositive = priceChangePercent >= 0;
+                    const changeColor = isPositive ? 'text-emerald-400' : 'text-red-400';
+                    const bgChange = isPositive ? 'bg-emerald-500/10' : 'bg-red-500/10';
+
+                    return (
+                      <tr key={item.id} className="border-b border-slate-800/30 hover:bg-slate-800/20 transition-colors group">
+                        <td className="py-3 pr-4">
+                          <Link href={`/dashboard/${item.symbol}`} className="flex items-center gap-2.5">
+                            <img
+                              src={getCryptoIconUrl(item.symbol)}
+                              alt={item.symbol}
+                              className="w-6 h-6 rounded-full"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${item.symbol.charAt(0)}&background=1e293b&color=94a3b8&size=24`;
+                              }}
+                            />
+                            <div>
+                              <span className="text-sm font-medium text-white">{item.symbol.replace('USDT', '')}</span>
+                              <span className="text-[10px] text-slate-500 ml-1.5 font-mono">/USDT</span>
+                            </div>
+                          </Link>
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <PriceFlash value={lastPrice}>
+                            <span className="text-sm font-semibold text-white tabular-nums">${formatPrice(lastPrice)}</span>
+                          </PriceFlash>
+                        </td>
+                        <td className={`py-3 px-4 text-right ${changeColor}`}>
+                          <PriceFlash value={priceChange}>
+                            <div className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium ${bgChange}`}>
+                              {getChangeIcon(priceChangePercent)}
+                              <span className="tabular-nums">{priceChangePercent >= 0 ? '+' : ''}{priceChangePercent.toFixed(2)}%</span>
+                            </div>
+                          </PriceFlash>
+                          <div className="text-[10px] text-slate-500 mt-0.5 tabular-nums">
+                            {priceChange >= 0 ? '+' : ''}${Math.abs(priceChange).toFixed(2)}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <span className="text-xs text-slate-300 tabular-nums">${formatVolume(volume24h)}</span>
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <span className="text-xs text-emerald-400/80 tabular-nums">${formatPrice(high24h)}</span>
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <span className="text-xs text-red-400/80 tabular-nums">${formatPrice(low24h)}</span>
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <span className="text-xs text-slate-300 tabular-nums">{formatMarketCap(quoteVolume24h, lastPrice)}</span>
+                        </td>
+                        <td className="py-3 pl-4 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <Link href={`/dashboard/${item.symbol}`} className="p-1.5 rounded text-slate-600 hover:text-blue-400 hover:bg-blue-500/10 transition-colors" title="Buka Grafik">
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </Link>
+                            <button onClick={() => handleDelete(item.id)} className="p-1.5 rounded text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="Hapus">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

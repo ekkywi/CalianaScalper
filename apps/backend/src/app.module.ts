@@ -10,10 +10,16 @@ import { BinanceWsService } from './infrastructure/exchange/binance-ws.service';
 import { BinanceRestService } from './infrastructure/exchange/binance-rest.service';
 import { CandleStorageService } from './infrastructure/database/candle-storage.service';
 import { MlEngineService } from './infrastructure/ml/ml-engine.service';
+import { BinanceExecutionService } from './infrastructure/exchange/binance-execution.service';
 import { AppController } from './app.controller';
 import { MarketOrchestrator } from './application/orchestrator/market.orchestrator';
 import { UiGateway } from './presentation/gateway/ui.gateway';
 import { CandleEntity } from './infrastructure/database/candle.entity';
+import { OrderEntity } from './infrastructure/database/order.entity';
+import { SymbolModule } from './application/symbol/symbol.module';
+import { SymbolEntity } from './infrastructure/database/symbol.entity'; 
+import { CandlesController } from './application/candles/candles.controller';
+import { PositionManagerService } from './infrastructure/risk/position-manager.service';
 
 @Module({
   imports: [
@@ -38,13 +44,6 @@ import { CandleEntity } from './infrastructure/database/candle.entity';
         const pass = configService.get<string>('DB_PASS');
         const name = configService.get<string>('DB_NAME');
 
-        console.log('--- DEBUG ENV ---');
-        console.log(`CWD: ${process.cwd()}`);
-        console.log(`DB_HOST: ${host}`);
-        console.log(`DB_USER: ${user}`);
-        console.log(`DB_PASS: ${pass ? 'TERBACA' : 'UNDEFINED'}`);
-        console.log('-----------------');
-
         if (!pass) {
           throw new Error('CRITICAL: DB_PASS kosong. File .env tidak terbaca atau key salah!');
         }
@@ -56,16 +55,20 @@ import { CandleEntity } from './infrastructure/database/candle.entity';
           username: user,
           password: pass,
           database: name,
-          entities: [CandleEntity],
+          
+          entities: [CandleEntity, SymbolEntity, OrderEntity], 
           synchronize: true, 
         };
       },
     }),
 
-    TypeOrmModule.forFeature([CandleEntity]),
+    TypeOrmModule.forFeature([CandleEntity, OrderEntity]),
+    
+    SymbolModule, 
   ],
   controllers: [
     AppController,
+    CandlesController,
   ],
   providers: [
     BinanceWsService,
@@ -74,13 +77,9 @@ import { CandleEntity } from './infrastructure/database/candle.entity';
     CandleStorageService,
     BinanceRestService,
     MlEngineService,
+    BinanceExecutionService,
+    PositionManagerService
   ],
 })
 
-export class AppModule implements OnModuleInit{
-  constructor(private readonly binanceRest: BinanceRestService) {}
-
-  async onModuleInit() {
-      await this.binanceRest.backfillCandles('BTCUSDT', '15m', 1000);
-  }
-}
+export class AppModule{}

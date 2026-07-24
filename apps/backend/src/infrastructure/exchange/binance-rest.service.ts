@@ -51,4 +51,30 @@ export class BinanceRestService {
             this.logger.error(`Gagal menarik data historis: ${error.message}`);
         }
     }
+
+    async fetchLatestCandle(symbol: string, interval: string = '15m') {
+        this.logger.log(`Menarik candle aktual terbaru untuk ${symbol}...`);
+        try {
+            const response = await axios.get(this.REST_URL, {
+                params: { symbol: symbol.toUpperCase(), interval, limit: 1 },
+            });
+
+            const k = response.data[0];
+            if (!k) return null;
+
+            return {
+                symbol: symbol.toUpperCase(),
+                startTime: k[0],
+                closeTime: k[6],
+                open: parseFloat(k[1]),
+                high: parseFloat(k[2]),
+                low: parseFloat(k[3]),
+                close: parseFloat(k[4]),
+                volume: parseFloat(k[5]),
+            };
+        } catch (error) {
+            this.logger.error(`Gagal menarik candle terbaru: ${error.message}`);
+            return null;
+        }
+    }
 }

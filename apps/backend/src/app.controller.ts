@@ -1,36 +1,43 @@
 // apps/backend/src/app.controller.ts
 
-import { Controller, Get, Logger } from '@nestjs/common';
+import { Controller, Get, Query, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { MARKET_EVENTS, type CandleData } from './core/domain/market.types';
+import { MARKET_EVENTS } from './core/domain/market.types';
+import { BinanceRestService } from './infrastructure/exchange/binance-rest.service';
 
 @Controller('debug')
 export class AppController {
   private readonly logger = new Logger('DebugController');
 
-  constructor(private eventEmitter: EventEmitter2) {}
+  constructor(
+    private eventEmitter: EventEmitter2,
+    private readonly binanceRestService: BinanceRestService
+  ) {}
 
   @Get('trigger-candle')
-  triggerMockCandle() {
-    this.logger.warn(`[DEBUG] Mesimulasikan penutupan cadle 15m...`);
+  async triggerLiveCandle(@Query('symbol') symbol: string = 'BTCUSDT') {
+    const targetSymbol = symbol.toUpperCase();
+    this.logger.warn(`[DEBUG] Menarik candle aktual dari Binance untuk simulasi penutupan ${targetSymbol}...`);
 
-    const mockCandle: CandleData = {
-      symbol: 'BTCUSDT',
-      startTime: Date.now() - 900000,
-      closeTime: Date.now(),
-      open: 65000,
-      high: 65500,
-      low: 64900,
-      close: 65400,
-      volume: 120.5,
-      isClosed: true,
-    };
+    try {
+      const liveCandle = await this.binanceRestService.fetchLatestCandle(targetSymbol, '15m');
+      
+      if (!liveCandle) {
+        return { status: `Gagal menarik data dari Binance untuk ${targetSymbol}` };
+      }
 
-    this.eventEmitter.emit(MARKET_EVENTS.CANDLE_CLOSED, mockCandle);
+      // Paksa status menjadi tertutup untuk memicu MarketOrchestrator
+      const payload = { ...liveCandle, isClosed: true };
 
-    return {
-      status: 'Simulasi dikirim',
-      data: mockCandle
-    };
+      this.eventEmitter.emit(MARKET_EVENTS.CANDLE_CLOSED, payload);
+
+      return {
+        status: 'Simulasi dikirim dengan data market aktual',
+        data: payload
+      };
+    } catch (error) {
+      this.logger.error(`[DEBUG] Error: ${error.message}`);
+      return { status: 'Error', message: error.message };
+    }
   }
 }

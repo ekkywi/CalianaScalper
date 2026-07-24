@@ -3,5 +3,7 @@ packages:
   - "services*"
   - "packages/*"
 allowBuilds:
+  bufferutil: false
+  ccxt: false
   sharp: false
   unrs-resolver: false

@@ -30,7 +30,13 @@ export class CandleStorageService {
                 volume: candle.volume,
             });
 
-            await this.candleRepo.save(newCandle);
+            await this.candleRepo
+                .createQueryBuilder()
+                .insert()
+                .into(CandleEntity)
+                .values(newCandle)
+                .orIgnore()
+                .execute();
             this.logger.log(`[DATABASE] Tersimpan: ${candle.symbol} pada timestamp ${candle.closeTime}`);
         } catch (error) {
             this.logger.error(`[DATABASE] Gagal menyimpan candle: ${error.message}`);

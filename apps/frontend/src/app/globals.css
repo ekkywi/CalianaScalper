@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0a0a0f;
+  --foreground: #ededed;
+  --color-up: #10b981;
+  --color-down: #ef4444;
+  --color-up-bg: rgba(16, 185, 129, 0.15);
+  --color-down-bg: rgba(239, 68, 68, 0.15);
+  --bg-primary: #0a0a0f;
+  --bg-secondary: #0f172a;
+  --bg-tertiary: #1e293b;
+  --border-color: #1e293b;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Flash animations for price changes */
+@keyframes flash-green {
+  0% {
+    background-color: rgba(16, 185, 129, 0.3);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@keyframes flash-red {
+  0% {
+    background-color: rgba(239, 68, 68, 0.3);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.animate-flash-green {
+  animation: flash-green 0.6s ease-out;
+  border-radius: 4px;
+}
+
+.animate-flash-red {
+  animation: flash-red 0.6s ease-out;
+  border-radius: 4px;
+}
+
+/* Table cell flash for individual cells */
+@keyframes flash-cell-green {
+  0% {
+    background-color: rgba(16, 185, 129, 0.25);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@keyframes flash-cell-red {
+  0% {
+    background-color: rgba(239, 68, 68, 0.25);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.animate-flash-cell-green {
+  animation: flash-cell-green 0.5s ease-out;
+}
+
+.animate-flash-cell-red {
+  animation: flash-cell-red 0.5s ease-out;
+}
+
+/* Custom scrollbar for tables */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: #334155;
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: #475569;
+}
