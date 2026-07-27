@@ -77,4 +77,34 @@ export class BinanceRestService {
             return null;
         }
     }
+
+    /**
+     * Public mainnet order book depth (for UI liquidity context — not testnet).
+     */
+    async fetchOrderBook(symbol: string, limit: number = 20) {
+        const sym = symbol.toUpperCase().replace('/', '');
+        const depthLimit = [5, 10, 20, 50, 100].includes(limit) ? limit : 20;
+        try {
+            const response = await axios.get('https://api.binance.com/api/v3/depth', {
+                params: { symbol: sym, limit: depthLimit },
+            });
+            const data = response.data;
+            return {
+                symbol: sym,
+                source: 'binance-mainnet' as const,
+                lastUpdateId: data.lastUpdateId,
+                bids: (data.bids || []).map((row: [string, string]) => ({
+                    price: parseFloat(row[0]),
+                    quantity: parseFloat(row[1]),
+                })),
+                asks: (data.asks || []).map((row: [string, string]) => ({
+                    price: parseFloat(row[0]),
+                    quantity: parseFloat(row[1]),
+                })),
+            };
+        } catch (error) {
+            this.logger.error(`[DEPTH] Gagal fetch order book ${sym}: ${error.message}`);
+            throw error;
+        }
+    }
 }

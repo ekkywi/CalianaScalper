@@ -17,6 +17,7 @@ import { SystemConfigEntity } from './infrastructure/database/system-config.enti
 import { SymbolModule } from './application/symbol/symbol.module';
 import { SymbolEntity } from './infrastructure/database/symbol.entity'; 
 import { CandlesController } from './application/candles/candles.controller';
+import { MarketController } from './application/market/market.controller';
 import { RiskModule } from './application/risk/risk.module';
 import { PerformanceModule } from './application/performance/performance.module';
 import { MlModule } from './application/ml/ml.module';
@@ -77,6 +78,7 @@ import { join } from 'path';
   controllers: [
     AppController,
     CandlesController,
+    MarketController,
   ],
   providers: [
     BinanceWsService,

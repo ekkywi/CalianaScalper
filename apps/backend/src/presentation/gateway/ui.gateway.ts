@@ -60,4 +60,13 @@ export class UiGateway implements OnGatewayConnection, OnGatewayDisconnect {
     handleRiskBreached(event: { reason: string }) {
         this.server.emit('risk-breached', event);
     }
+
+    @OnEvent(MARKET_EVENTS.TRADING_MODE_CHANGED)
+    handleTradingModeChanged(event: {
+        mode: string;
+        previousMode: string;
+        timestamp: number;
+    }) {
+        this.server.emit('trading-mode-changed', event);
+    }
 }

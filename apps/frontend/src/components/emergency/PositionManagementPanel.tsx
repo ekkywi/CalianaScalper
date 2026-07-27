@@ -13,6 +13,7 @@ import {
   updatePositionSlTp,
 } from '@/services/api-extended';
 import { socket } from '@/services/socket';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
 type PositionRow = {
   symbol: string;
@@ -32,6 +33,7 @@ export default function PositionManagementPanel() {
   const [tpDraft, setTpDraft] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [closeAllConfirmOpen, setCloseAllConfirmOpen] = useState(false);
 
   const load = async () => {
     try {
@@ -81,11 +83,11 @@ export default function PositionManagementPanel() {
   };
 
   const handleCloseAll = async () => {
-    if (!confirm('Close all open positions on exchange?')) return;
     setClosing('ALL');
     setError(null);
     try {
       await closeAllPositions();
+      setCloseAllConfirmOpen(false);
       await load();
     } catch (err: any) {
       setError(err.message || 'Failed to close all');
@@ -131,7 +133,7 @@ export default function PositionManagementPanel() {
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button
-            onClick={handleCloseAll}
+            onClick={() => setCloseAllConfirmOpen(true)}
             disabled={positions.length === 0 || closing === 'ALL'}
             className="text-xs text-red-400 hover:text-red-300 font-medium px-2.5 py-1.5 bg-red-500/10 rounded-lg transition-colors disabled:opacity-40"
           >
@@ -139,6 +141,19 @@ export default function PositionManagementPanel() {
           </button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={closeAllConfirmOpen}
+        title="Close All Positions?"
+        description="This will market-close every open position on the exchange. Confirm only if you intend to flatten all exposure now."
+        confirmLabel="Close All Positions"
+        variant="danger"
+        loading={closing === 'ALL'}
+        onConfirm={handleCloseAll}
+        onCancel={() => {
+          if (closing !== 'ALL') setCloseAllConfirmOpen(false);
+        }}
+      />
 
       {error && <p className="text-xs text-red-400 mb-3">{error}</p>}
 

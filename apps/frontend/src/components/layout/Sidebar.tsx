@@ -3,13 +3,13 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { binanceTickerWS } from '@/services/binance-ws';
+import ConnectionStatus from '@/components/layout/ConnectionStatus';
 import {
-  Activity, BarChart3, LayoutDashboard, Wifi, WifiOff, Shield,
-  Brain, Bell, Terminal, AlertTriangle, Send, Settings, FileText, ChevronDown
+  Activity, BarChart3, LayoutDashboard,
+  Brain, Bell, Terminal, Send, Shield,
 } from 'lucide-react';
 
 const NAV_SECTIONS = [
@@ -23,7 +23,7 @@ const NAV_SECTIONS = [
     label: 'Trading',
     items: [
       { href: '/dashboard/risk', label: 'Risk Management', icon: Shield },
-      { href: '/dashboard/orders', label: 'Manual Order', icon: Send },
+      { href: '/dashboard/orders', label: 'Orders', icon: Send },
       { href: '/dashboard/positions', label: 'Positions', icon: Activity },
     ],
   },
@@ -46,16 +46,7 @@ const NAV_SECTIONS = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const [isConnected, setIsConnected] = useState(false);
   const [expanded, setExpanded] = useState(true);
-
-  useEffect(() => {
-    const unsub = binanceTickerWS.onStatusChange((connected) => {
-      setIsConnected(connected);
-    });
-    binanceTickerWS.connect();
-    return () => unsub();
-  }, []);
 
   const isActive = (href: string) => {
     if (href === '/dashboard') return pathname === '/dashboard';
@@ -63,11 +54,11 @@ export default function Sidebar() {
   };
 
   return (
-    <aside className={`${expanded ? 'w-56' : 'w-16'} bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 transition-all duration-200`}>
+    <aside className={`${expanded ? 'w-56' : 'w-16'} h-full bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 transition-all duration-200`}>
       {/* Logo / Brand */}
       <div className="h-14 flex items-center justify-center lg:justify-start lg:px-4 border-b border-slate-800">
         <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-blue-600 flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center shrink-0">
             <BarChart3 className="w-4 h-4 text-white" />
           </div>
           {expanded && (
@@ -95,7 +86,7 @@ export default function Sidebar() {
                       href={item.href}
                       className={`flex items-center justify-center lg:justify-start gap-3 px-2 lg:px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
                         active
-                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                          ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
                           : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
                       }`}
                       title={expanded ? '' : item.label}
@@ -111,21 +102,9 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* Connection Status */}
-      <div className="p-2 lg:p-3 border-t border-slate-800">
-        <div className="flex items-center justify-center lg:justify-start gap-2 text-xs text-slate-500">
-          {isConnected ? (
-            <>
-              <Wifi className="w-3 h-3 text-emerald-400 shrink-0" />
-              {expanded && <span className="text-emerald-400">Live</span>}
-            </>
-          ) : (
-            <>
-              <WifiOff className="w-3 h-3 text-red-400 shrink-0" />
-              {expanded && <span className="text-red-400">Disconnected</span>}
-            </>
-          )}
-        </div>
+      {/* Connection Status — dots only */}
+      <div className="p-3 border-t border-slate-800 flex justify-center">
+        <ConnectionStatus />
       </div>
     </aside>
   );

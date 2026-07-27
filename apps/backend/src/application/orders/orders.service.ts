@@ -38,6 +38,50 @@ export class OrdersService {
     });
   }
 
+  async listExchangeOpenOrders(symbol?: string) {
+    try {
+      return await this.execution.fetchOpenOrders(
+        symbol ? symbol.toUpperCase().replace('/', '') : undefined,
+      );
+    } catch (err: any) {
+      throw new BadRequestException(
+        err.message || 'Failed to fetch open orders from exchange',
+      );
+    }
+  }
+
+  async listExchangeRecentOrders(symbol?: string, limit: number = 50) {
+    try {
+      return await this.execution.fetchRecentOrders(
+        symbol ? symbol.toUpperCase().replace('/', '') : undefined,
+        limit,
+      );
+    } catch (err: any) {
+      throw new BadRequestException(
+        err.message || 'Failed to fetch recent orders from exchange',
+      );
+    }
+  }
+
+  async cancelExchangeOrder(orderId: string, symbol?: string) {
+    if (!orderId?.trim()) {
+      throw new BadRequestException('orderId is required');
+    }
+    if (!symbol?.trim()) {
+      throw new BadRequestException('symbol query param is required to cancel');
+    }
+    const ok = await this.execution.cancelOrder(
+      orderId.trim(),
+      symbol.toUpperCase().replace('/', ''),
+    );
+    if (!ok) {
+      throw new BadRequestException(
+        `Failed to cancel order ${orderId} on exchange`,
+      );
+    }
+    return { success: true, orderId, symbol: symbol.toUpperCase() };
+  }
+
   async placeOrder(dto: PlaceOrderDto) {
     const symbol = (dto.symbol || '').toUpperCase().replace('/', '');
     const side = dto.side;

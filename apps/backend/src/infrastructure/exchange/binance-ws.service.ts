@@ -11,9 +11,11 @@ import { SymbolEntity } from '../database/symbol.entity';
 @Injectable()
 export class BinanceWsService implements OnModuleInit, OnModuleDestroy {
     private readonly logger = new Logger(BinanceWsService.name);
-    private ws: WebSocket;
-    private readonly WS_URL = 'wss://stream.binance.com:9443';
+    private ws: WebSocket | null = null;
     private readonly TIMEFRAME = '15m';
+    private isIdle = true;
+    private isDestroyed = false;
+    private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(
         private readonly eventEmitter: EventEmitter2,
@@ -26,72 +28,137 @@ export class BinanceWsService implements OnModuleInit, OnModuleDestroy {
     }
 
     onModuleDestroy() {
-        if (this.ws) this.ws.close();
+        this.isDestroyed = true;
+        this.clearReconnectTimer();
+        this.closeSocket(false);
+    }
+
+    private clearReconnectTimer() {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+    }
+
+    private closeSocket(allowReconnect: boolean) {
+        if (!this.ws) return;
+        const socket = this.ws;
+        this.ws = null;
+        socket.removeAllListeners();
+        if (!allowReconnect) {
+            socket.on('close', () => {});
+        }
+        socket.close();
+    }
+
+    private goIdle(reason: string) {
+        this.isIdle = true;
+        this.clearReconnectTimer();
+        this.closeSocket(false);
+        this.logger.log(`[WS] Idle — ${reason}`);
+    }
+
+    private scheduleReconnect() {
+        if (this.isDestroyed || this.isIdle) return;
+        this.clearReconnectTimer();
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            void this.connect();
+        }, 5000);
     }
 
     private async connect() {
+        if (this.isDestroyed) return;
+
         try {
             const activeSymbols = await this.symbolService.getActiveSymbols();
-            
-            const baseStream = activeSymbols.length > 0 
-                ? `${activeSymbols[0].symbol.toLowerCase()}@kline_${this.TIMEFRAME}` 
-                : `btcusdt@kline_${this.TIMEFRAME}`;
+            if (activeSymbols.length === 0) {
+                this.goIdle('No active symbols — add a symbol to start market data');
+                return;
+            }
 
+            this.isIdle = false;
+            this.clearReconnectTimer();
+            this.closeSocket(false);
+
+            const baseStream = `${activeSymbols[0].symbol.toLowerCase()}@kline_${this.TIMEFRAME}`;
             const url = `wss://stream.binance.com:9443/ws/${baseStream}`;
-            this.ws = new WebSocket(url);
+            const socket = new WebSocket(url);
+            this.ws = socket;
 
-            this.ws.on('open', () => {
+            socket.on('open', () => {
                 this.logger.log(`Terhubung ke Binance WebSocket (Base: ${baseStream})`);
-
                 if (activeSymbols.length > 1) {
-                    const symbols = activeSymbols.slice(1).map(s => s.symbol);
+                    const symbols = activeSymbols.slice(1).map((s) => s.symbol);
                     this.subscribeToSymbols(symbols);
                 }
             });
 
-            this.ws.on('message', (data: WebSocket.RawData) => {
+            socket.on('message', (data: WebSocket.RawData) => {
                 this.handleMessage(data);
             });
 
-            this.ws.on('close', () => {
-                this.logger.warn('Koneksi WebSocket terputus. Mencoba reconnect dalam 5 detik...');
-                setTimeout(() => this.connect(), 5000);
+            socket.on('close', () => {
+                if (this.ws === socket) {
+                    this.ws = null;
+                }
+                if (this.isDestroyed || this.isIdle) {
+                    return;
+                }
+                this.logger.warn(
+                    'Koneksi WebSocket terputus. Mencoba reconnect dalam 5 detik...',
+                );
+                this.scheduleReconnect();
             });
 
-            this.ws.on('error', (error) => {
+            socket.on('error', (error) => {
                 this.logger.error(`WebSocket Error: ${error.message}`);
             });
         } catch (error) {
             this.logger.error(`Gagal menginisialisasi WebSocket: ${error.message}`);
+            if (!this.isDestroyed && !this.isIdle) {
+                this.scheduleReconnect();
+            }
         }
     }
 
+    private isSocketOpen(): boolean {
+        return this.ws?.readyState === WebSocket.OPEN;
+    }
+
     private subscribeToSymbols(symbols: string[]) {
-        if (this.ws.readyState !== WebSocket.OPEN) return;
+        if (!this.isSocketOpen() || symbols.length === 0) return;
 
-        const streams = symbols.map(s => `${s.toLowerCase()}@kline_${this.TIMEFRAME}`);
-
+        const streams = symbols.map((s) => `${s.toLowerCase()}@kline_${this.TIMEFRAME}`);
         const payload = {
             method: 'SUBSCRIBE',
             params: streams,
             id: Date.now(),
         };
 
-        this.ws.send(JSON.stringify(payload));
+        this.ws!.send(JSON.stringify(payload));
         this.logger.log(`[WS] Subscribe ke: ${symbols.join(', ')}`);
     }
 
     private unsubscribeFromSymbols(symbols: string[]) {
-        if (this.ws.readyState !== WebSocket.OPEN) return;
-        const streams = symbols.map(s => `${s.toLowerCase()}@kline_${this.TIMEFRAME}`);
+        if (!this.isSocketOpen() || symbols.length === 0) return;
+
+        const streams = symbols.map((s) => `${s.toLowerCase()}@kline_${this.TIMEFRAME}`);
         const payload = {
             method: 'UNSUBSCRIBE',
             params: streams,
             id: Date.now(),
         };
-        
-        this.ws.send(JSON.stringify(payload));
+
+        this.ws!.send(JSON.stringify(payload));
         this.logger.log(`[WS] Unsubscribed dari: ${symbols.join(', ')}`);
+    }
+
+    private async syncConnectionAfterSymbolChange() {
+        const activeSymbols = await this.symbolService.getActiveSymbols();
+        if (activeSymbols.length === 0) {
+            this.goIdle('No active symbols remaining');
+        }
     }
 
     private handleMessage(data: WebSocket.RawData) {
@@ -119,24 +186,38 @@ export class BinanceWsService implements OnModuleInit, OnModuleDestroy {
 
     @OnEvent('SYMBOL_ADDED')
     async handleSymbolAdded(symbol: SymbolEntity) {
-        this.logger.log(`[ORCHESTRATOR] Menyiapkan infrastruktur untuk simbol baru: ${symbol.symbol}`);
-    
+        this.logger.log(
+            `[WS] Menyiapkan infrastruktur untuk simbol baru: ${symbol.symbol}`,
+        );
+
         await this.binanceRestService.backfillCandles(symbol.symbol, this.TIMEFRAME, 1000);
-    
+
+        if (this.isIdle || !this.isSocketOpen()) {
+            await this.connect();
+            return;
+        }
+
         this.subscribeToSymbols([symbol.symbol]);
     }
 
     @OnEvent('SYMBOL_STATUS_CHANGED')
-    handleSymbolStatusChanged(symbol: SymbolEntity) {
+    async handleSymbolStatusChanged(symbol: SymbolEntity) {
         if (symbol.isActive) {
+            if (this.isIdle || !this.isSocketOpen()) {
+                await this.connect();
+                return;
+            }
             this.subscribeToSymbols([symbol.symbol]);
-        } else {
-        this.unsubscribeFromSymbols([symbol.symbol]);
+            return;
         }
+
+        this.unsubscribeFromSymbols([symbol.symbol]);
+        await this.syncConnectionAfterSymbolChange();
     }
 
     @OnEvent('SYMBOL_REMOVED')
-    handleSymbolRemoved(symbol: SymbolEntity) {
+    async handleSymbolRemoved(symbol: SymbolEntity) {
         this.unsubscribeFromSymbols([symbol.symbol]);
+        await this.syncConnectionAfterSymbolChange();
     }
 }

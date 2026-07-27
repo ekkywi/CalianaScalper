@@ -21,7 +21,7 @@ type Health = {
 
 export default function SystemHealthMonitor() {
   const [health, setHealth] = useState<Health | null>(null);
-  const [socketOk, setSocketOk] = useState(socket.connected);
+  const [socketOk, setSocketOk] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -43,6 +43,7 @@ export default function SystemHealthMonitor() {
     const onDisconnect = () => setSocketOk(false);
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
+    setSocketOk(socket.connected);
     const interval = setInterval(load, 10000);
     return () => {
       socket.off('connect', onConnect);

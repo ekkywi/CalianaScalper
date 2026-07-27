@@ -109,6 +109,64 @@ export async function fetchOrders(params?: {
   return getJson(`/orders${qs ? `?${qs}` : ''}`);
 }
 
+export type ExchangeOrder = {
+  id: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  type: string;
+  status: string;
+  price: number;
+  amount: number;
+  filled: number;
+  remaining: number;
+  timestamp: number;
+};
+
+export async function fetchExchangeOpenOrders(symbol?: string): Promise<ExchangeOrder[]> {
+  const query = new URLSearchParams();
+  if (symbol) query.set('symbol', symbol);
+  const qs = query.toString();
+  return getJson(`/orders/exchange/open${qs ? `?${qs}` : ''}`);
+}
+
+export async function fetchExchangeRecentOrders(
+  symbol?: string,
+  limit: number = 50,
+): Promise<ExchangeOrder[]> {
+  const query = new URLSearchParams();
+  if (symbol) query.set('symbol', symbol);
+  query.set('limit', String(limit));
+  return getJson(`/orders/exchange/recent?${query.toString()}`);
+}
+
+export async function cancelExchangeOrder(orderId: string, symbol: string) {
+  return sendJson(
+    `/orders/exchange/${encodeURIComponent(orderId)}?symbol=${encodeURIComponent(symbol)}`,
+    'DELETE',
+  );
+}
+
+export type OrderBookLevel = { price: number; quantity: number };
+
+export type OrderBookResponse = {
+  symbol: string;
+  source: string;
+  lastUpdateId: number;
+  bids: OrderBookLevel[];
+  asks: OrderBookLevel[];
+};
+
+export async function fetchOrderBook(
+  symbol: string,
+  limit: number = 20,
+): Promise<OrderBookResponse> {
+  const query = new URLSearchParams({
+    symbol,
+    limit: String(limit),
+  });
+  return getJson(`/market/depth?${query.toString()}`);
+}
+
 // ============================================================
 // ML Engine
 // ============================================================
@@ -161,11 +219,42 @@ export async function fetchEquityCurve() {
 }
 
 // ============================================================
-// System Health
+// System Health / Trading Mode
 // ============================================================
+
+export type TradingMode = 'paper' | 'live';
+
+export type TradingModeStatus = {
+  mode: TradingMode;
+  liveAllowed: boolean;
+  liveBlockReason: string | null;
+  openPositions: number;
+  openOrders: number;
+  canSwitch: boolean;
+  switchBlockReason: string | null;
+};
+
+export type AccountBalanceResponse = {
+  mode: TradingMode;
+  asset: string;
+  free: number;
+  used: number;
+  total: number;
+};
 
 export async function fetchSystemHealth() {
   return getJson('/system/health');
+}
+
+export async function fetchTradingMode(): Promise<TradingModeStatus> {
+  return getJson('/system/trading-mode');
+}
+
+export async function setTradingMode(
+  mode: TradingMode,
+  confirm?: string,
+): Promise<TradingModeStatus> {
+  return sendJson('/system/trading-mode', 'PUT', { mode, confirm });
 }
 
 export async function fetchLogs(params?: {
@@ -197,8 +286,8 @@ export async function toggleStrategy(_id: string, _enabled: boolean) {
   throw new Error('Strategies API not implemented yet (Phase 4 deferred)');
 }
 
-export async function fetchAccountBalance() {
-  throw new Error('Account balance API not implemented yet (Phase 4 deferred)');
+export async function fetchAccountBalance(): Promise<AccountBalanceResponse> {
+  return getJson('/system/balance');
 }
 
 export async function testConnection() {

@@ -27,14 +27,6 @@ const INDICATORS = [
   { label: 'EMA 12', value: 'ema12', color: '#06b6d4' },
 ];
 
-function safePrice(price: number): string {
-  if (!Number.isFinite(price) || price === 0) return '--';
-  if (price >= 1000) return price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (price >= 1) return price.toFixed(4);
-  if (price >= 0.01) return price.toFixed(6);
-  return price.toFixed(8);
-}
-
 function formatPrice(price: number): string {
   if (!Number.isFinite(price) || price === 0) return '0.00';
   if (price >= 1000) return price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -94,6 +86,8 @@ export default function ChartPage() {
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const indicatorSeriesRef = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
   const klineWsRef = useRef<WebSocket | null>(null);
+  const chartAliveRef = useRef(false);
+  const activeIndicatorsRef = useRef<Set<string>>(new Set());
 
   const [timeframe, setTimeframe] = useState('15m');
   const [activeIndicators, setActiveIndicators] = useState<Set<string>>(new Set());
@@ -106,12 +100,30 @@ export default function ChartPage() {
   const [candleData, setCandleData] = useState<CandlestickData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Custom type with volume for internal use
-  interface CandleWithVolume extends CandlestickData {
-    volume: number;
-  }
+  activeIndicatorsRef.current = activeIndicators;
 
-  // Fetch initial 24hr ticker data
+  const safeChartCall = useCallback((fn: () => void) => {
+    if (!chartAliveRef.current || !chartRef.current) return;
+    try {
+      fn();
+    } catch {
+      // Chart/series may already be disposed (Strict Mode / navigation)
+    }
+  }, []);
+
+  const clearIndicatorSeries = useCallback(() => {
+    safeChartCall(() => {
+      indicatorSeriesRef.current.forEach((series) => {
+        try {
+          chartRef.current?.removeSeries(series);
+        } catch {
+          // ignore disposed series
+        }
+      });
+    });
+    indicatorSeriesRef.current.clear();
+  }, [safeChartCall]);
+
   const fetchTickerData = useCallback(async () => {
     try {
       const data = await fetch24hrTicker(symbol);
@@ -126,11 +138,9 @@ export default function ChartPage() {
     }
   }, [symbol]);
 
-  // Fetch historical klines
   const fetchCandleData = useCallback(async (tf: string) => {
     setIsLoading(true);
     try {
-      // For ticker mode, fetch 1m klines as base data
       const actualTf = tf === 'ticker' ? '1m' : tf;
       const data = await fetchKlines(symbol, actualTf, 500);
       const formatted: CandlestickData[] = data.map((k: KlineData) => ({
@@ -150,9 +160,55 @@ export default function ChartPage() {
     }
   }, [symbol]);
 
+  const updateIndicator = useCallback(
+    (indicator: string, data: CandlestickData[]) => {
+      if (!chartAliveRef.current || !chartRef.current || data.length === 0) return;
+
+      let indicatorData: (LineData | null)[] = [];
+      switch (indicator) {
+        case 'ma7':
+          indicatorData = calculateMA(data, 7);
+          break;
+        case 'ma25':
+          indicatorData = calculateMA(data, 25);
+          break;
+        case 'ema12':
+          indicatorData = calculateEMA(data, 12);
+          break;
+        default:
+          return;
+      }
+
+      const validData = indicatorData.filter((d): d is LineData => d !== null);
+
+      safeChartCall(() => {
+        const series = indicatorSeriesRef.current.get(indicator);
+        if (series) {
+          series.setData(validData);
+          return;
+        }
+        const indConfig = INDICATORS.find((i) => i.value === indicator);
+        if (!indConfig || !chartRef.current) return;
+        const newSeries = chartRef.current.addLineSeries({
+          color: indConfig.color,
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        newSeries.setData(validData);
+        indicatorSeriesRef.current.set(indicator, newSeries);
+      });
+    },
+    [safeChartCall],
+  );
+
   // Initialize chart
   useEffect(() => {
     if (!chartContainerRef.current) return;
+
+    // Clear leftover DOM nodes from Strict Mode remount
+    chartContainerRef.current.replaceChildren();
 
     const chart = createChart(chartContainerRef.current, {
       layout: {
@@ -198,11 +254,13 @@ export default function ChartPage() {
     });
 
     chartRef.current = chart;
+    chartAliveRef.current = true;
 
     const handleResize = () => {
-      if (chartContainerRef.current) {
-        chart.applyOptions({ width: chartContainerRef.current.clientWidth });
-      }
+      if (!chartAliveRef.current || !chartContainerRef.current) return;
+      safeChartCall(() => {
+        chart.applyOptions({ width: chartContainerRef.current!.clientWidth });
+      });
     };
     window.addEventListener('resize', handleResize);
 
@@ -227,36 +285,54 @@ export default function ChartPage() {
 
     return () => {
       window.removeEventListener('resize', handleResize);
-      chart.remove();
+      chartAliveRef.current = false;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      indicatorSeriesRef.current.clear();
+      chartRef.current = null;
+      try {
+        chart.remove();
+      } catch {
+        // already disposed
+      }
     };
-  }, []);
+  }, [safeChartCall]);
 
   // Load data when timeframe or symbol changes
   useEffect(() => {
+    let cancelled = false;
+
     const load = async () => {
       await fetchTickerData();
+      if (cancelled) return;
       const data = await fetchCandleData(timeframe);
-      if (data.length > 0 && candleSeriesRef.current && volumeSeriesRef.current) {
-        candleSeriesRef.current.setData(data);
-        volumeSeriesRef.current.setData(
+      if (cancelled || !chartAliveRef.current) return;
+      if (data.length === 0 || !candleSeriesRef.current || !volumeSeriesRef.current) return;
+
+      safeChartCall(() => {
+        candleSeriesRef.current?.setData(data);
+        volumeSeriesRef.current?.setData(
           data.map((d) => ({
             time: d.time,
-            value: 0, // We don't have volume in CandlestickData, use 0 as placeholder
+            value: 0,
             color: d.close >= d.open ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)',
-          }))
+          })),
         );
+      });
 
-        activeIndicators.forEach((ind) => {
-          updateIndicator(ind, data);
-        });
-      }
+      activeIndicatorsRef.current.forEach((ind) => {
+        updateIndicator(ind, data);
+      });
     };
-    load();
-  }, [symbol, timeframe, fetchTickerData, fetchCandleData]);
 
-  // Setup real-time WebSocket directly to Binance (per-second updates)
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol, timeframe, fetchTickerData, fetchCandleData, safeChartCall, updateIndicator]);
+
+  // Setup real-time WebSocket (do not depend on activeIndicators — use ref)
   useEffect(() => {
-    // Close previous WS
     if (klineWsRef.current) {
       klineWsRef.current.close();
       klineWsRef.current = null;
@@ -271,10 +347,10 @@ export default function ChartPage() {
     const ws = new WebSocket(wsUrl);
     klineWsRef.current = ws;
 
-    // For ticker mode: track line series for real-time price chart
     let tickerLineSeries: ISeriesApi<'Line'> | null = null;
 
     ws.onmessage = (event: MessageEvent) => {
+      if (!chartAliveRef.current) return;
       try {
         const raw = JSON.parse(event.data);
 
@@ -286,16 +362,11 @@ export default function ChartPage() {
             setLastPrice(close);
           }
 
-          // Create or update line series for ticker mode
-          if (chartRef.current) {
+          safeChartCall(() => {
+            if (!chartRef.current) return;
             if (!tickerLineSeries) {
-              // Hide candlestick & volume, show line
-              if (candleSeriesRef.current) {
-                candleSeriesRef.current.applyOptions({ visible: false });
-              }
-              if (volumeSeriesRef.current) {
-                volumeSeriesRef.current.applyOptions({ visible: false });
-              }
+              candleSeriesRef.current?.applyOptions({ visible: false });
+              volumeSeriesRef.current?.applyOptions({ visible: false });
               tickerLineSeries = chartRef.current.addLineSeries({
                 color: '#10b981',
                 lineWidth: 2,
@@ -307,13 +378,11 @@ export default function ChartPage() {
                 crosshairMarkerBackgroundColor: '#0f172a',
               });
             }
-
-            // Update line data - add new point every tick
             tickerLineSeries.update({
               time: currentTime,
               value: close,
             });
-          }
+          });
         } else if (!isTickerMode && raw.e === 'kline') {
           const k = raw.k;
           const close = parseFloat(k.c);
@@ -327,41 +396,44 @@ export default function ChartPage() {
             setLastPrice(close);
           }
 
-          if (candleSeriesRef.current && volumeSeriesRef.current) {
-            const candleUpdate = {
-              time: startTime,
-              open: Number.isFinite(open) ? open : 0,
-              high: Number.isFinite(high) ? high : 0,
-              low: Number.isFinite(low) ? low : 0,
-              close: Number.isFinite(close) ? close : 0,
-            };
-            candleSeriesRef.current.update(candleUpdate);
-            volumeSeriesRef.current.update({
+          if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
+
+          const candleUpdate = {
+            time: startTime,
+            open: Number.isFinite(open) ? open : 0,
+            high: Number.isFinite(high) ? high : 0,
+            low: Number.isFinite(low) ? low : 0,
+            close: Number.isFinite(close) ? close : 0,
+          };
+
+          safeChartCall(() => {
+            candleSeriesRef.current?.update(candleUpdate);
+            volumeSeriesRef.current?.update({
               time: startTime,
               value: Number.isFinite(volume) ? volume : 0,
               color: close >= open ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)',
             });
+          });
 
-            // Update indicator lines on tick
-            if (activeIndicators.size > 0) {
-              setCandleData((prev) => {
-                const updated = [...prev];
-                const lastIdx = updated.length - 1;
-                if (lastIdx >= 0 && updated[lastIdx].time === startTime) {
-                  updated[lastIdx] = candleUpdate;
-                } else {
-                  updated.push(candleUpdate);
-                }
-                activeIndicators.forEach((ind) => {
-                  updateIndicator(ind, updated);
-                });
-                return updated;
+          const indicators = activeIndicatorsRef.current;
+          if (indicators.size > 0) {
+            setCandleData((prev) => {
+              const updated = [...prev];
+              const lastIdx = updated.length - 1;
+              if (lastIdx >= 0 && updated[lastIdx].time === startTime) {
+                updated[lastIdx] = candleUpdate;
+              } else {
+                updated.push(candleUpdate);
+              }
+              indicators.forEach((ind) => {
+                updateIndicator(ind, updated);
               });
-            }
+              return updated;
+            });
           }
         }
       } catch {
-        // ignore parse errors
+        // ignore parse / disposed errors
       }
     };
 
@@ -371,84 +443,51 @@ export default function ChartPage() {
 
     return () => {
       ws.close();
-      klineWsRef.current = null;
-      // Clean up ticker line series if it exists
-      if (tickerLineSeries && chartRef.current) {
+      if (klineWsRef.current === ws) {
+        klineWsRef.current = null;
+      }
+      safeChartCall(() => {
+        if (tickerLineSeries && chartRef.current) {
+          try {
+            chartRef.current.removeSeries(tickerLineSeries);
+          } catch {
+            // ignore
+          }
+        }
         try {
-          chartRef.current.removeSeries(tickerLineSeries);
-        } catch {}
-      }
-      // Restore candle & volume visibility when leaving ticker mode
-      if (candleSeriesRef.current) {
-        candleSeriesRef.current.applyOptions({ visible: true });
-      }
-      if (volumeSeriesRef.current) {
-        volumeSeriesRef.current.applyOptions({ visible: true });
-      }
+          candleSeriesRef.current?.applyOptions({ visible: true });
+          volumeSeriesRef.current?.applyOptions({ visible: true });
+        } catch {
+          // ignore disposed
+        }
+      });
+      tickerLineSeries = null;
     };
-  }, [symbol, timeframe, activeIndicators]);
+  }, [symbol, timeframe, safeChartCall, updateIndicator]);
 
-  // Also listen to backend socket for candle ticks (fallback)
+  // Backend socket for candle ticks (fallback)
   useEffect(() => {
-    const handleCandleTick = (data: any) => {
+    const handleCandleTick = (data: { symbol?: string; close?: number }) => {
       if (data.symbol === symbol && Number.isFinite(data.close)) {
-        setLastPrice(data.close);
+        setLastPrice(data.close as number);
       }
     };
 
     socket.on('realtime-price', handleCandleTick);
-
     return () => {
-      socket.off('realtime-price');
+      socket.off('realtime-price', handleCandleTick);
     };
   }, [symbol]);
 
-  // Update indicator lines
-  const updateIndicator = (indicator: string, data: CandlestickData[]) => {
-    if (!chartRef.current || data.length === 0) return;
-
-    const series = indicatorSeriesRef.current.get(indicator);
-    let indicatorData: (LineData | null)[] = [];
-
-    switch (indicator) {
-      case 'ma7':
-        indicatorData = calculateMA(data, 7);
-        break;
-      case 'ma25':
-        indicatorData = calculateMA(data, 25);
-        break;
-      case 'ema12':
-        indicatorData = calculateEMA(data, 12);
-        break;
-    }
-
-    const validData = indicatorData.filter((d): d is LineData => d !== null);
-    if (series) {
-      series.setData(validData);
-    } else {
-      const indConfig = INDICATORS.find((i) => i.value === indicator);
-      if (indConfig) {
-        const newSeries = chartRef.current.addLineSeries({
-          color: indConfig.color,
-          lineWidth: 1,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        newSeries.setData(validData);
-        indicatorSeriesRef.current.set(indicator, newSeries);
-      }
-    }
-  };
-
-  // Toggle indicator
   const toggleIndicator = (indicator: string) => {
     const newSet = new Set(activeIndicators);
     if (newSet.has(indicator)) {
       newSet.delete(indicator);
       const series = indicatorSeriesRef.current.get(indicator);
-      if (series && chartRef.current) {
-        chartRef.current.removeSeries(series);
+      if (series) {
+        safeChartCall(() => {
+          chartRef.current?.removeSeries(series);
+        });
         indicatorSeriesRef.current.delete(indicator);
       }
     } else {
@@ -463,11 +502,9 @@ export default function ChartPage() {
   const hasPriceData = Number.isFinite(lastPrice) && lastPrice > 0;
   const isPositiveChange = priceChangePercent >= 0;
   const changeColor = isPositiveChange ? 'text-emerald-400' : 'text-red-400';
-  const bgChange = isPositiveChange ? 'bg-emerald-500/10' : 'bg-red-500/10';
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-slate-100">
-      {/* Header Navigation */}
       <div className="sticky top-0 z-10 bg-[#0a0a0f]/95 backdrop-blur-sm border-b border-slate-800/50">
         <div className="px-4 lg:px-6 py-2 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -495,7 +532,10 @@ export default function ChartPage() {
               {hasPriceData && (
                 <div className={`flex items-center gap-1 text-xs font-medium ${changeColor} mt-0.5`}>
                   {isPositiveChange ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                  <span className="tabular-nums">{priceChangePercent >= 0 ? '+' : ''}{priceChangePercent.toFixed(2)}%</span>
+                  <span className="tabular-nums">
+                    {priceChangePercent >= 0 ? '+' : ''}
+                    {priceChangePercent.toFixed(2)}%
+                  </span>
                 </div>
               )}
             </div>
@@ -503,9 +543,7 @@ export default function ChartPage() {
         </div>
       </div>
 
-      {/* Chart Area */}
       <div className="px-4 lg:px-6 py-4">
-        {/* Toolbar */}
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-1 bg-slate-900 rounded-lg p-0.5 border border-slate-800">
             {TIMEFRAMES.map((tf) => (
@@ -513,15 +551,12 @@ export default function ChartPage() {
                 key={tf.value}
                 onClick={() => {
                   setTimeframe(tf.value);
-                  indicatorSeriesRef.current.forEach((series) => {
-                    if (chartRef.current) chartRef.current.removeSeries(series);
-                  });
-                  indicatorSeriesRef.current.clear();
+                  clearIndicatorSeries();
                   setActiveIndicators(new Set());
                 }}
                 className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
                   timeframe === tf.value
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-sky-600 text-white'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -551,31 +586,61 @@ export default function ChartPage() {
           </div>
         </div>
 
-        {/* Chart Container */}
         <div className="relative">
           {isLoading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm rounded-xl">
               <div className="flex flex-col items-center gap-2">
-                <RefreshCw className="w-5 h-5 text-emerald-400 animate-spin" />
+                <RefreshCw className="w-5 h-5 text-sky-400 animate-spin" />
                 <span className="text-xs text-slate-400">Memuat data...</span>
               </div>
             </div>
           )}
           <div
             ref={chartContainerRef}
-            className="w-full bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl"
+            className="w-full min-h-[520px] bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl"
           />
         </div>
 
-        {/* Market Stats Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
           <StatBox label="Harga Terkini" value={hasPriceData ? `$${formatPrice(lastPrice)}` : '--'} color="text-white" />
-          <StatBox label="Perubahan 24j" value={hasPriceData ? `${priceChangePercent >= 0 ? '+' : ''}${priceChangePercent.toFixed(2)}%` : '--'} color={changeColor} />
-          <StatBox label="High 24j" value={Number.isFinite(high24h) && high24h > 0 ? `$${formatPrice(high24h)}` : '--'} color="text-emerald-400/80" />
-          <StatBox label="Low 24j" value={Number.isFinite(low24h) && low24h > 0 ? `$${formatPrice(low24h)}` : '--'} color="text-red-400/80" />
-          <StatBox label="Volume 24j" value={Number.isFinite(volume24h) && volume24h > 0 ? formatVolume(volume24h) : '--'} color="text-slate-300" />
-          <StatBox label="Harga Buka 24j" value={candleData.length > 0 && Number.isFinite(candleData[0]?.open) ? `$${formatPrice(candleData[0].open)}` : '--'} color="text-slate-300" />
-          <StatBox label="Range 24j" value={Number.isFinite(high24h) && Number.isFinite(low24h) && low24h > 0 ? `${((high24h - low24h) / low24h * 100).toFixed(2)}%` : '--'} color="text-slate-300" />
+          <StatBox
+            label="Perubahan 24j"
+            value={hasPriceData ? `${priceChangePercent >= 0 ? '+' : ''}${priceChangePercent.toFixed(2)}%` : '--'}
+            color={changeColor}
+          />
+          <StatBox
+            label="High 24j"
+            value={Number.isFinite(high24h) && high24h > 0 ? `$${formatPrice(high24h)}` : '--'}
+            color="text-slate-300"
+          />
+          <StatBox
+            label="Low 24j"
+            value={Number.isFinite(low24h) && low24h > 0 ? `$${formatPrice(low24h)}` : '--'}
+            color="text-slate-300"
+          />
+          <StatBox
+            label="Volume 24j"
+            value={Number.isFinite(volume24h) && volume24h > 0 ? formatVolume(volume24h) : '--'}
+            color="text-slate-300"
+          />
+          <StatBox
+            label="Harga Buka 24j"
+            value={
+              candleData.length > 0 && Number.isFinite(candleData[0]?.open)
+                ? `$${formatPrice(candleData[0].open)}`
+                : '--'
+            }
+            color="text-slate-300"
+          />
+          <StatBox
+            label="Range 24j"
+            value={
+              Number.isFinite(high24h) && Number.isFinite(low24h) && low24h > 0
+                ? `${(((high24h - low24h) / low24h) * 100).toFixed(2)}%`
+                : '--'
+            }
+            color="text-slate-300"
+          />
           <StatBox label="Symbol" value={symbol} color="text-slate-300" />
         </div>
       </div>

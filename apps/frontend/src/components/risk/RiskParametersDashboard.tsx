@@ -5,7 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAppStore } from '@/store/app-store';
-import { Shield, AlertTriangle, Save, Loader2 } from 'lucide-react';
+import { Shield, AlertTriangle, Save, Loader2, Check } from 'lucide-react';
 import { fetchRiskConfig, updateRiskConfig } from '@/services/api-extended';
 
 export default function RiskParametersDashboard() {
@@ -16,7 +16,6 @@ export default function RiskParametersDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  // Load risk config from backend on mount
   useEffect(() => {
     const loadConfig = async () => {
       try {
@@ -36,10 +35,9 @@ export default function RiskParametersDashboard() {
   const handleSave = async () => {
     setSaving(true);
     setError(null);
+    setSaved(false);
     try {
-      // Kirim ke backend API
       await updateRiskConfig(localConfig);
-      // Update local store setelah sukses
       setRiskConfig(localConfig);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -58,6 +56,7 @@ export default function RiskParametersDashboard() {
     max = 100,
     step = 0.5,
     suffix = '%',
+    unitHint,
   }: {
     label: string;
     value: number;
@@ -66,12 +65,16 @@ export default function RiskParametersDashboard() {
     max?: number;
     step?: number;
     suffix?: string;
+    unitHint?: string;
   }) => (
     <div className="space-y-1.5">
-      <div className="flex justify-between text-xs">
-        <span className="text-slate-400">{label}</span>
-        <span className="text-white font-mono">
-          {suffix === '%' ? (value * 100).toFixed(1) : value.toFixed(2)}
+      <div className="flex justify-between text-xs gap-2">
+        <span className="text-slate-400">
+          {label}
+          {unitHint && <span className="text-slate-600 ml-1">({unitHint})</span>}
+        </span>
+        <span className="text-white font-mono shrink-0">
+          {suffix === '%' ? (value * 100).toFixed(1) : value.toFixed(suffix === 'x' ? 0 : 2)}
           {suffix}
         </span>
       </div>
@@ -84,7 +87,7 @@ export default function RiskParametersDashboard() {
         onChange={(e) =>
           onChange(suffix === '%' ? parseFloat(e.target.value) / 100 : parseFloat(e.target.value))
         }
-        className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-emerald-500"
+        className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-sky-500"
       />
     </div>
   );
@@ -102,8 +105,7 @@ export default function RiskParametersDashboard() {
 
   return (
     <div className="bg-slate-900/50 border border-slate-800/50 rounded-xl p-4 lg:p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center justify-between mb-5 gap-3">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center">
             <Shield className="w-4 h-4 text-amber-400" />
@@ -116,52 +118,70 @@ export default function RiskParametersDashboard() {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors"
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50 ${
+            saved ? 'bg-emerald-600' : 'bg-sky-600 hover:bg-sky-700'
+          }`}
         >
-          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-          {saving ? 'Saving...' : saved ? 'Saved!' : 'Save'}
+          {saving ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : saved ? (
+            <Check className="w-3.5 h-3.5" />
+          ) : (
+            <Save className="w-3.5 h-3.5" />
+          )}
+          {saving ? 'Saving...' : saved ? 'Saved' : 'Save Configuration'}
         </button>
       </div>
 
-      {/* Error Banner */}
+      {saved && (
+        <div className="mb-4 p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg flex items-center gap-2">
+          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <p className="text-xs text-emerald-400">Configuration saved successfully.</p>
+        </div>
+      )}
+
       {error && (
         <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
           <p className="text-xs text-red-400 font-mono">{error}</p>
         </div>
       )}
 
-      {/* Risk Parameters Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <SliderInput
-          label="Max Position Size (% of Account)"
+          label="Max Position Size"
+          unitHint="% of account"
           value={localConfig.maxPositionSizePercent}
           onChange={(v) => setLocalConfig((p) => ({ ...p, maxPositionSizePercent: v }))}
           max={20}
           suffix="%"
         />
         <SliderInput
-          label="Stop Loss (%)"
+          label="Stop Loss"
+          unitHint="%"
           value={localConfig.stopLossPercent}
           onChange={(v) => setLocalConfig((p) => ({ ...p, stopLossPercent: v }))}
           max={15}
           suffix="%"
         />
         <SliderInput
-          label="Take Profit (%)"
+          label="Take Profit"
+          unitHint="%"
           value={localConfig.takeProfitPercent}
           onChange={(v) => setLocalConfig((p) => ({ ...p, takeProfitPercent: v }))}
           max={30}
           suffix="%"
         />
         <SliderInput
-          label="Max Daily Loss (% of Account)"
+          label="Max Daily Loss"
+          unitHint="% of account"
           value={localConfig.maxDailyLossPercent}
           onChange={(v) => setLocalConfig((p) => ({ ...p, maxDailyLossPercent: v }))}
           max={20}
           suffix="%"
         />
         <SliderInput
-          label="Max Drawdown (%)"
+          label="Max Drawdown"
+          unitHint="%"
           value={localConfig.maxDrawdownPercent}
           onChange={(v) => setLocalConfig((p) => ({ ...p, maxDrawdownPercent: v }))}
           max={50}
@@ -169,6 +189,7 @@ export default function RiskParametersDashboard() {
         />
         <SliderInput
           label="Max Open Positions"
+          unitHint="count"
           value={localConfig.maxOpenPositions}
           onChange={(v) => setLocalConfig((p) => ({ ...p, maxOpenPositions: v }))}
           min={1}
@@ -178,6 +199,7 @@ export default function RiskParametersDashboard() {
         />
         <SliderInput
           label="Max Trades Per Day"
+          unitHint="count"
           value={localConfig.maxTradesPerDay}
           onChange={(v) => setLocalConfig((p) => ({ ...p, maxTradesPerDay: v }))}
           min={1}
@@ -187,6 +209,7 @@ export default function RiskParametersDashboard() {
         />
         <SliderInput
           label="Min ML Confidence"
+          unitHint="%"
           value={localConfig.minConfidenceThreshold}
           onChange={(v) => setLocalConfig((p) => ({ ...p, minConfidenceThreshold: v }))}
           max={100}
@@ -194,6 +217,7 @@ export default function RiskParametersDashboard() {
         />
         <SliderInput
           label="Max Slippage"
+          unitHint="%"
           value={localConfig.slippageProtectionPercent}
           onChange={(v) => setLocalConfig((p) => ({ ...p, slippageProtectionPercent: v }))}
           max={5}
@@ -201,11 +225,10 @@ export default function RiskParametersDashboard() {
         />
       </div>
 
-      {/* Warning */}
       <div className="mt-4 flex items-start gap-2 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">
         <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
         <p className="text-[11px] text-amber-400/80">
-          Changes to risk parameters are applied immediately. High risk values can lead to significant losses.
+          Changes to risk parameters are applied immediately after save. High risk values can lead to significant losses.
         </p>
       </div>
     </div>

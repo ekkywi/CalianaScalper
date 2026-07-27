@@ -71,6 +71,9 @@ export const DEFAULT_RISK_CONFIG: RiskConfig = {
     slippageProtectionPercent: 0.005,
 };
 
+/** Paper = Binance spot testnet/sandbox; Live = spot mainnet real capital */
+export type TradingMode = 'paper' | 'live';
+
 export const MARKET_EVENTS = {
     CANDLE_TICK: 'market.candle.tick',
     CANDLE_CLOSED: 'market.candle.closed',
@@ -81,4 +84,5 @@ export const MARKET_EVENTS = {
     RISK_BREACHED: 'risk.breached',
     TRADING_HALTED: 'trading.halted',
     TRADING_RESUMED: 'trading.resumed',
+    TRADING_MODE_CHANGED: 'trading.mode.changed',
 };

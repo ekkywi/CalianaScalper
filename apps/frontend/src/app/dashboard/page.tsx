@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { fetchSymbols, deleteSymbol } from '@/services/api';
 import { fetchMultiple24hrTickers } from '@/services/binance-rest';
 import { binanceTickerWS, TickerData } from '@/services/binance-ws';
@@ -11,11 +11,11 @@ import RealTimePnL from '@/components/monitoring/RealTimePnL';
 import MlPredictionDisplay from '@/components/monitoring/MlPredictionDisplay';
 import SystemHealthMonitor from '@/components/monitoring/SystemHealthMonitor';
 import EmergencyCircuitBreaker from '@/components/emergency/EmergencyCircuitBreaker';
-import NotificationCenter from '@/components/notifications/NotificationCenter';
+import CriticalStatusStrip from '@/components/layout/CriticalStatusStrip';
 import Link from 'next/link';
 import {
   Trash2, TrendingUp, TrendingDown, Minus, ExternalLink, Shield,
-  BarChart3, Brain, Activity, Bell, ArrowRight, Zap, AlertTriangle
+  BarChart3, Brain, Activity, Bell, ArrowRight,
 } from 'lucide-react';
 
 interface SymbolItem {
@@ -58,12 +58,12 @@ function getCryptoIconUrl(symbol: string): string {
   return `https://assets.coincap.io/assets/icons/${base}@2x.png`;
 }
 
-const QUICK_ACTIONS = [
-  { href: '/dashboard/risk', label: 'Risk Management', icon: Shield, desc: 'Configure risk parameters', color: 'text-amber-400', bg: 'bg-amber-500/10' },
-  { href: '/dashboard/performance', label: 'Performance', icon: BarChart3, desc: 'View trading metrics', color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
-  { href: '/dashboard/ml-models', label: 'ML Models', icon: Brain, desc: 'AI predictions & models', color: 'text-purple-400', bg: 'bg-purple-500/10' },
-  { href: '/dashboard/notifications', label: 'Notifications', icon: Bell, desc: 'Alerts & rules', color: 'text-sky-400', bg: 'bg-sky-500/10' },
-  { href: '/dashboard/health', label: 'System Health', icon: Activity, desc: 'Service status', color: 'text-slate-400', bg: 'bg-slate-500/10' },
+const QUICK_LINKS = [
+  { href: '/dashboard/risk', label: 'Risk', icon: Shield },
+  { href: '/dashboard/performance', label: 'Performance', icon: BarChart3 },
+  { href: '/dashboard/ml-models', label: 'ML Models', icon: Brain },
+  { href: '/dashboard/notifications', label: 'Alerts', icon: Bell },
+  { href: '/dashboard/health', label: 'Health', icon: Activity },
 ];
 
 export default function DashboardPage() {
@@ -71,7 +71,6 @@ export default function DashboardPage() {
   const [tickers, setTickers] = useState<TickerMap>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const unsubRef = useRef<(() => void) | null>(null);
   const [activeTab, setActiveTab] = useState<'watchlist' | 'overview'>('overview');
 
   const loadData = useCallback(async () => {
@@ -174,7 +173,7 @@ export default function DashboardPage() {
               <button
                 onClick={() => setActiveTab('overview')}
                 className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                  activeTab === 'overview' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                  activeTab === 'overview' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-white'
                 }`}
               >
                 Overview
@@ -182,7 +181,7 @@ export default function DashboardPage() {
               <button
                 onClick={() => setActiveTab('watchlist')}
                 className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                  activeTab === 'watchlist' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                  activeTab === 'watchlist' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-white'
                 }`}
               >
                 Watchlist
@@ -196,37 +195,39 @@ export default function DashboardPage() {
       <div className="px-4 lg:px-6 py-4 space-y-6">
         {activeTab === 'overview' ? (
           <>
-            {/* Quick Actions */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-              {QUICK_ACTIONS.map((action) => {
-                const Icon = action.icon;
+            <CriticalStatusStrip />
+
+            {/* Critical: PnL + Emergency above the fold */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <RealTimePnL />
+              <EmergencyCircuitBreaker />
+            </div>
+
+            <SystemHealthMonitor />
+
+            {/* Secondary analytics below the fold */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <PerformanceDashboard />
+              <MlPredictionDisplay />
+            </div>
+
+            {/* Compact secondary links — not above the fold */}
+            <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/50">
+              <span className="text-[10px] text-slate-600 uppercase tracking-wider mr-1">More</span>
+              {QUICK_LINKS.map((link) => {
+                const Icon = link.icon;
                 return (
                   <Link
-                    key={action.href}
-                    href={action.href}
-                    className="bg-slate-900/50 border border-slate-800/50 rounded-xl p-3 hover:bg-slate-800/50 transition-colors group"
+                    key={link.href}
+                    href={link.href}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-slate-400 hover:text-white bg-slate-900/50 border border-slate-800/50 rounded-lg hover:border-slate-700 transition-colors"
                   >
-                    <div className={`w-8 h-8 rounded-lg ${action.bg} flex items-center justify-center mb-2`}>
-                      <Icon className={`w-4 h-4 ${action.color}`} />
-                    </div>
-                    <p className="text-xs font-medium text-white group-hover:text-emerald-400 transition-colors">{action.label}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">{action.desc}</p>
+                    <Icon className="w-3 h-3" />
+                    {link.label}
+                    <ArrowRight className="w-2.5 h-2.5 opacity-50" />
                   </Link>
                 );
               })}
-            </div>
-
-            {/* Main Dashboard Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 space-y-6">
-                <PerformanceDashboard />
-                <RealTimePnL />
-              </div>
-              <div className="space-y-6">
-                <MlPredictionDisplay />
-                <SystemHealthMonitor />
-                <EmergencyCircuitBreaker />
-              </div>
             </div>
           </>
         ) : (
@@ -235,7 +236,7 @@ export default function DashboardPage() {
             {loading ? (
               <div className="flex items-center justify-center py-20">
                 <div className="flex flex-col items-center gap-3">
-                  <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                  <div className="w-6 h-6 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
                   <p className="text-xs text-slate-500">Memuat data...</p>
                 </div>
               </div>
@@ -316,17 +317,17 @@ export default function DashboardPage() {
                           <span className="text-xs text-slate-300 tabular-nums">${formatVolume(volume24h)}</span>
                         </td>
                         <td className="py-3 px-4 text-right">
-                          <span className="text-xs text-emerald-400/80 tabular-nums">${formatPrice(high24h)}</span>
+                          <span className="text-xs text-slate-300 tabular-nums">${formatPrice(high24h)}</span>
                         </td>
                         <td className="py-3 px-4 text-right">
-                          <span className="text-xs text-red-400/80 tabular-nums">${formatPrice(low24h)}</span>
+                          <span className="text-xs text-slate-300 tabular-nums">${formatPrice(low24h)}</span>
                         </td>
                         <td className="py-3 px-4 text-right">
                           <span className="text-xs text-slate-300 tabular-nums">{formatMarketCap(quoteVolume24h, lastPrice)}</span>
                         </td>
                         <td className="py-3 pl-4 text-right">
                           <div className="flex items-center justify-end gap-1">
-                            <Link href={`/dashboard/${item.symbol}`} className="p-1.5 rounded text-slate-600 hover:text-blue-400 hover:bg-blue-500/10 transition-colors" title="Buka Grafik">
+                            <Link href={`/dashboard/${item.symbol}`} className="p-1.5 rounded text-slate-600 hover:text-sky-400 hover:bg-sky-500/10 transition-colors" title="Buka Grafik">
                               <ExternalLink className="w-3.5 h-3.5" />
                             </Link>
                             <button onClick={() => handleDelete(item.id)} className="p-1.5 rounded text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="Hapus">

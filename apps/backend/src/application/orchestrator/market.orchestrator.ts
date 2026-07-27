@@ -6,6 +6,7 @@ import { MARKET_EVENTS, type CandleData } from '../../core/domain/market.types';
 import { MlEngineService } from '../../infrastructure/ml/ml-engine.service';
 import { BinanceExecutionService } from '../../infrastructure/exchange/binance-execution.service';
 import { PositionManagerService } from '../../infrastructure/risk/position-manager.service';
+import { SymbolService } from '../symbol/symbol.service';
 
 @Injectable()
 export class MarketOrchestrator {
@@ -19,11 +20,21 @@ export class MarketOrchestrator {
         private readonly mlEngine: MlEngineService,
         private readonly executionService: BinanceExecutionService,
         private readonly positionManager: PositionManagerService,
+        private readonly symbolService: SymbolService,
     ) {}
 
     @OnEvent(MARKET_EVENTS.CANDLE_CLOSED)
     async handleCandleClosed(candle: CandleData) {
         try {
+            const activeSymbols = await this.symbolService.getActiveSymbols();
+            const isActive = activeSymbols.some((s) => s.symbol === candle.symbol);
+            if (!isActive) {
+                this.logger.warn(
+                    `[ORCHESTRATOR] ${candle.symbol} is not an active symbol — skipping candle close.`,
+                );
+                return;
+            }
+
             // STEP 1: Mutex check - prevent duplicate candle processing
             const lastTime = this.lastExecutedCandleTime.get(candle.symbol) || 0;
             if (candle.closeTime <= lastTime) {
