@@ -239,6 +239,23 @@ export class BinanceExecutionService {
     }
 
     /**
+     * Close an existing LONG by market-selling the given quantity.
+     * Quantity must be > 0 — never call with 0 (order is rejected by validation).
+     */
+    async closePosition(symbol: string, quantity: number): Promise<OrderResult | null> {
+        if (quantity <= 0) {
+            this.logger.error(
+                `[CLOSE-POSITION] Quantity tidak valid untuk ${symbol}: ${quantity}`,
+            );
+            return null;
+        }
+        this.logger.log(
+            `[CLOSE-POSITION] Menutup posisi ${symbol} dengan market sell qty=${quantity}...`,
+        );
+        return this.executeMarketOrder(symbol, 'sell', quantity);
+    }
+
+    /**
      * Fetch order status from exchange
      */
     async fetchOrderStatus(orderId: string, symbol: string): Promise<OrderResult | null> {

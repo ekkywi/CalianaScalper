@@ -1,26 +1,53 @@
 // apps/frontend/src/components/risk/RiskParametersDashboard.tsx
-// Panel untuk mengatur parameter risiko global
+// Panel untuk mengatur parameter risiko global — TERHUBUNG ke backend API
 
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAppStore } from '@/store/app-store';
-import { Shield, AlertTriangle, Save } from 'lucide-react';
+import { Shield, AlertTriangle, Save, Loader2 } from 'lucide-react';
+import { fetchRiskConfig, updateRiskConfig } from '@/services/api-extended';
 
 export default function RiskParametersDashboard() {
   const { riskConfig, setRiskConfig } = useAppStore();
   const [localConfig, setLocalConfig] = useState({ ...riskConfig });
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+
+  // Load risk config from backend on mount
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        setLoading(true);
+        const config = await fetchRiskConfig();
+        setLocalConfig(config);
+        setRiskConfig(config);
+      } catch (err: any) {
+        setError(err.message || 'Failed to load risk config');
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadConfig();
+  }, [setRiskConfig]);
 
   const handleSave = async () => {
     setSaving(true);
-    setRiskConfig(localConfig);
-    // In production, call API: await updateRiskConfig(localConfig);
-    await new Promise((r) => setTimeout(r, 500));
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setError(null);
+    try {
+      // Kirim ke backend API
+      await updateRiskConfig(localConfig);
+      // Update local store setelah sukses
+      setRiskConfig(localConfig);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to save risk config');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const SliderInput = ({
@@ -62,6 +89,17 @@ export default function RiskParametersDashboard() {
     </div>
   );
 
+  if (loading) {
+    return (
+      <div className="bg-slate-900/50 border border-slate-800/50 rounded-xl p-4 lg:p-6">
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+          <span className="ml-2 text-xs text-slate-400">Loading risk configuration...</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-slate-900/50 border border-slate-800/50 rounded-xl p-4 lg:p-6">
       {/* Header */}
@@ -80,10 +118,17 @@ export default function RiskParametersDashboard() {
           disabled={saving}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors"
         >
-          <Save className="w-3.5 h-3.5" />
+          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
           {saving ? 'Saving...' : saved ? 'Saved!' : 'Save'}
         </button>
       </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+          <p className="text-xs text-red-400 font-mono">{error}</p>
+        </div>
+      )}
 
       {/* Risk Parameters Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

@@ -396,10 +396,10 @@ export default function ChartPage() {
       }
     };
 
-    socket.on('candle_tick', handleCandleTick);
+    socket.on('realtime-price', handleCandleTick);
 
     return () => {
-      socket.off('candle_tick');
+      socket.off('realtime-price');
     };
   }, [symbol]);
 

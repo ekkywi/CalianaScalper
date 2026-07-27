@@ -1,25 +1,27 @@
-// apps/backend/src/app.module.ts
-
-import { Module, OnModuleInit } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
-import { join } from 'path';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { BinanceWsService } from './infrastructure/exchange/binance-ws.service';
 import { BinanceRestService } from './infrastructure/exchange/binance-rest.service';
 import { CandleStorageService } from './infrastructure/database/candle-storage.service';
-import { MlEngineService } from './infrastructure/ml/ml-engine.service';
-import { BinanceExecutionService } from './infrastructure/exchange/binance-execution.service';
 import { AppController } from './app.controller';
 import { MarketOrchestrator } from './application/orchestrator/market.orchestrator';
 import { UiGateway } from './presentation/gateway/ui.gateway';
 import { CandleEntity } from './infrastructure/database/candle.entity';
 import { OrderEntity } from './infrastructure/database/order.entity';
+import { PositionEntity } from './infrastructure/database/position.entity';
+import { TradeEntity } from './infrastructure/database/trade.entity';
+import { SystemConfigEntity } from './infrastructure/database/system-config.entity';
 import { SymbolModule } from './application/symbol/symbol.module';
 import { SymbolEntity } from './infrastructure/database/symbol.entity'; 
 import { CandlesController } from './application/candles/candles.controller';
-import { PositionManagerService } from './infrastructure/risk/position-manager.service';
+import { RiskModule } from './application/risk/risk.module';
+import { PerformanceModule } from './application/performance/performance.module';
+import { MlModule } from './application/ml/ml.module';
+import { SystemModule } from './application/system/system.module';
+import { join } from 'path';
 
 @Module({
   imports: [
@@ -56,7 +58,7 @@ import { PositionManagerService } from './infrastructure/risk/position-manager.s
           password: pass,
           database: name,
           
-          entities: [CandleEntity, SymbolEntity, OrderEntity], 
+          entities: [CandleEntity, SymbolEntity, OrderEntity, PositionEntity, TradeEntity, SystemConfigEntity], 
           synchronize: true, 
         };
       },
@@ -64,7 +66,11 @@ import { PositionManagerService } from './infrastructure/risk/position-manager.s
 
     TypeOrmModule.forFeature([CandleEntity, OrderEntity]),
     
-    SymbolModule, 
+    SymbolModule,
+    RiskModule,
+    PerformanceModule,
+    MlModule,
+    SystemModule,
   ],
   controllers: [
     AppController,
@@ -76,9 +82,6 @@ import { PositionManagerService } from './infrastructure/risk/position-manager.s
     UiGateway,
     CandleStorageService,
     BinanceRestService,
-    MlEngineService,
-    BinanceExecutionService,
-    PositionManagerService
   ],
 })
 

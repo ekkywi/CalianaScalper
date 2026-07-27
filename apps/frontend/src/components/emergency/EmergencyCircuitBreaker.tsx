@@ -1,63 +1,91 @@
 // apps/frontend/src/components/emergency/EmergencyCircuitBreaker.tsx
-// Panel darurat dengan tombol kill switch dan auto-trigger rules
+// Panel darurat dengan tombol kill switch — TERHUBUNG ke backend API
 
 'use client';
 
 import { useState } from 'react';
 import { useAppStore } from '@/store/app-store';
-import { AlertTriangle, Ban, Play, ShieldAlert, Activity } from 'lucide-react';
+import { AlertTriangle, Ban, Play, ShieldAlert, Activity, Loader2 } from 'lucide-react';
+import { emergencyStopAll, resumeTrading } from '@/services/api-extended';
 
 export default function EmergencyCircuitBreaker() {
   const { isEmergencyStopped, setEmergencyStopped, tradingHalted, setTradingHalted, addLog, addAlert } = useAppStore();
   const [confirming, setConfirming] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [autoTriggerRules, setAutoTriggerRules] = useState({
     drawdown: true,
     dailyLoss: true,
     maxTrades: false,
   });
 
-  const handleEmergencyStop = () => {
-    setEmergencyStopped(true);
-    setTradingHalted(true);
-    setConfirming(false);
-    addAlert({
-      id: `emergency-${Date.now()}`,
-      type: 'system',
-      title: 'EMERGENCY STOP ACTIVATED',
-      message: 'All trading has been halted. Manual intervention required to resume.',
-      severity: 'critical',
-      timestamp: Math.floor(Date.now() / 1000),
-      read: false,
-      action: 'resume',
-    });
-    addLog({
-      id: `log-${Date.now()}`,
-      level: 'ERROR',
-      message: 'EMERGENCY STOP triggered by user',
-      timestamp: Math.floor(Date.now() / 1000),
-      source: 'circuit-breaker',
-    });
+  const handleEmergencyStop = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await emergencyStopAll();
+      setEmergencyStopped(true);
+      setTradingHalted(true);
+      setConfirming(false);
+      addAlert({
+        id: `emergency-${Date.now()}`,
+        type: 'system',
+        title: 'EMERGENCY STOP ACTIVATED',
+        message: 'All trading has been halted via backend. Positions are being closed.',
+        severity: 'critical',
+        timestamp: Math.floor(Date.now() / 1000),
+        read: false,
+        action: 'resume',
+      });
+      addLog({
+        id: `log-${Date.now()}`,
+        level: 'ERROR',
+        message: 'EMERGENCY STOP triggered by user — backend confirmed',
+        timestamp: Math.floor(Date.now() / 1000),
+        source: 'circuit-breaker',
+      });
+    } catch (err: any) {
+      setError(err.message || 'Failed to execute emergency stop');
+      addLog({
+        id: `log-${Date.now()}`,
+        level: 'ERROR',
+        message: `EMERGENCY STOP FAILED: ${err.message}`,
+        timestamp: Math.floor(Date.now() / 1000),
+        source: 'circuit-breaker',
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleResume = () => {
-    setEmergencyStopped(false);
-    setTradingHalted(false);
-    addAlert({
-      id: `resume-${Date.now()}`,
-      type: 'system',
-      title: 'Trading Resumed',
-      message: 'Trading has been manually resumed.',
-      severity: 'info',
-      timestamp: Math.floor(Date.now() / 1000),
-      read: false,
-    });
-    addLog({
-      id: `log-${Date.now()}`,
-      level: 'INFO',
-      message: 'Trading resumed by user',
-      timestamp: Math.floor(Date.now() / 1000),
-      source: 'circuit-breaker',
-    });
+  const handleResume = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await resumeTrading();
+      setEmergencyStopped(false);
+      setTradingHalted(false);
+      addAlert({
+        id: `resume-${Date.now()}`,
+        type: 'system',
+        title: 'Trading Resumed',
+        message: 'Trading has been resumed via backend.',
+        severity: 'info',
+        timestamp: Math.floor(Date.now() / 1000),
+        read: false,
+      });
+      addLog({
+        id: `log-${Date.now()}`,
+        level: 'INFO',
+        message: 'Trading resumed by user — backend confirmed',
+        timestamp: Math.floor(Date.now() / 1000),
+        source: 'circuit-breaker',
+      });
+    } catch (err: any) {
+      setError(err.message || 'Failed to resume trading');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -72,6 +100,13 @@ export default function EmergencyCircuitBreaker() {
           <p className="text-[10px] text-slate-500">Emergency trading controls</p>
         </div>
       </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+          <p className="text-xs text-red-400 font-mono">{error}</p>
+        </div>
+      )}
 
       {/* Status Banner */}
       <div
@@ -106,26 +141,29 @@ export default function EmergencyCircuitBreaker() {
       {!confirming ? (
         <button
           onClick={() => setConfirming(true)}
-          disabled={isEmergencyStopped}
+          disabled={isEmergencyStopped || loading}
           className="w-full py-4 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl transition-all hover:scale-[1.02] active:scale-95 mb-4 flex items-center justify-center gap-2"
         >
-          <AlertTriangle className="w-5 h-5" />
-          EMERGENCY STOP ALL
+          {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <AlertTriangle className="w-5 h-5" />}
+          {loading ? 'Processing...' : 'EMERGENCY STOP ALL'}
         </button>
       ) : (
         <div className="space-y-2 mb-4">
           <p className="text-xs text-red-400 font-medium text-center">
-            Are you sure? This will halt all trading immediately.
+            Are you sure? This will halt all trading and close all open positions immediately.
           </p>
           <div className="flex gap-2">
             <button
               onClick={handleEmergencyStop}
-              className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white font-bold text-sm rounded-lg transition-colors"
+              disabled={loading}
+              className="flex-1 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold text-sm rounded-lg transition-colors flex items-center justify-center gap-2"
             >
+              {loading && <Loader2 className="w-4 h-4 animate-spin" />}
               Confirm Stop
             </button>
             <button
               onClick={() => setConfirming(false)}
+              disabled={loading}
               className="flex-1 py-3 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded-lg transition-colors"
             >
               Cancel
@@ -138,16 +176,18 @@ export default function EmergencyCircuitBreaker() {
       {isEmergencyStopped && (
         <button
           onClick={handleResume}
-          className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm rounded-lg transition-colors flex items-center justify-center gap-2 mb-4"
+          disabled={loading}
+          className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-medium text-sm rounded-lg transition-colors flex items-center justify-center gap-2 mb-4"
         >
-          <Play className="w-4 h-4" />
-          Resume Trading
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+          {loading ? 'Resuming...' : 'Resume Trading'}
         </button>
       )}
 
       {/* Auto-Trigger Rules */}
       <div>
         <p className="text-xs text-slate-400 font-medium mb-2">Auto-Trigger Rules</p>
+        <p className="text-[10px] text-slate-600 mb-2">(Applied server-side — these are read-only indicators)</p>
         <div className="space-y-2">
           {[
             { key: 'drawdown' as const, label: 'Max Drawdown Reached', desc: 'Auto-stop when drawdown exceeds limit' },

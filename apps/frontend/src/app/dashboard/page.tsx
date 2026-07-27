@@ -132,7 +132,7 @@ export default function DashboardPage() {
   }, [symbols]);
 
   useEffect(() => {
-    socket.on('candle_tick', (data: { symbol: string; close: number }) => {
+    const onPrice = (data: { symbol: string; close: number }) => {
       setTickers((prev) => {
         const existing = prev[data.symbol];
         if (existing) {
@@ -140,8 +140,9 @@ export default function DashboardPage() {
         }
         return prev;
       });
-    });
-    return () => { socket.off('candle_tick'); };
+    };
+    socket.on('realtime-price', onPrice);
+    return () => { socket.off('realtime-price', onPrice); };
   }, []);
 
   const handleDelete = async (id: string) => {

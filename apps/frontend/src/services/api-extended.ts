@@ -1,114 +1,98 @@
 // apps/frontend/src/services/api-extended.ts
-// Extended API service for all new UI features
+// Extended API service for risk, performance, ML, and system endpoints
 
 const API_BASE = 'http://localhost:3001/api';
+
+async function getJson(path: string) {
+  const res = await fetch(`${API_BASE}${path}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Request failed: ${path} (${res.status})`);
+  return res.json();
+}
+
+async function sendJson(path: string, method: string, body?: unknown) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || `Request failed: ${path} (${res.status})`);
+  }
+  return res.json();
+}
 
 // ============================================================
 // Risk Management
 // ============================================================
 
 export async function fetchRiskConfig() {
-  const res = await fetch(`${API_BASE}/risk/config`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch risk config');
-  return res.json();
+  return getJson('/risk/config');
 }
 
-export async function updateRiskConfig(config: Record<string, any>) {
-  const res = await fetch(`${API_BASE}/risk/config`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(config),
-  });
-  if (!res.ok) throw new Error('Failed to update risk config');
-  return res.json();
+export async function updateRiskConfig(config: Record<string, unknown>) {
+  return sendJson('/risk/config', 'PUT', config);
 }
 
 export async function fetchPositions() {
-  const res = await fetch(`${API_BASE}/risk/positions`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch positions');
-  return res.json();
+  return getJson('/risk/positions');
 }
 
 export async function fetchDailyStats() {
-  const res = await fetch(`${API_BASE}/risk/daily-stats`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch daily stats');
-  return res.json();
+  return getJson('/risk/daily-stats');
+}
+
+export async function fetchRiskStatus() {
+  return getJson('/risk/status');
 }
 
 export async function emergencyStopAll() {
-  const res = await fetch(`${API_BASE}/risk/emergency-stop`, {
-    method: 'POST',
-  });
-  if (!res.ok) throw new Error('Failed to trigger emergency stop');
-  return res.json();
+  return sendJson('/risk/emergency-stop', 'POST');
 }
 
 export async function resumeTrading() {
-  const res = await fetch(`${API_BASE}/risk/resume`, {
-    method: 'POST',
+  return sendJson('/risk/resume', 'POST');
+}
+
+export async function closePosition(symbol: string) {
+  return sendJson(`/risk/positions/${encodeURIComponent(symbol)}`, 'DELETE');
+}
+
+export async function closeAllPositions() {
+  return sendJson('/risk/positions', 'DELETE');
+}
+
+export async function updatePositionSlTp(
+  symbol: string,
+  stopLoss?: number,
+  takeProfit?: number,
+) {
+  return sendJson(`/risk/positions/${encodeURIComponent(symbol)}`, 'PATCH', {
+    stopLoss,
+    takeProfit,
   });
-  if (!res.ok) throw new Error('Failed to resume trading');
-  return res.json();
 }
 
 // ============================================================
-// Orders & Trading
+// Orders & Trading (Phase 4 deferred — stubs throw clearly)
 // ============================================================
 
-export async function placeOrder(order: {
+export async function placeOrder(_order: {
   symbol: string;
   side: 'buy' | 'sell';
   type: 'MARKET' | 'LIMIT' | 'STOP_LOSS';
   quantity: number;
   price?: number;
 }) {
-  const res = await fetch(`${API_BASE}/orders`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(order),
-  });
-  if (!res.ok) throw new Error('Failed to place order');
-  return res.json();
+  throw new Error('Manual orders API not implemented yet (Phase 4 deferred)');
 }
 
-export async function fetchOrders(params?: {
+export async function fetchOrders(_params?: {
   symbol?: string;
   limit?: number;
   status?: string;
 }) {
-  const query = new URLSearchParams();
-  if (params?.symbol) query.set('symbol', params.symbol);
-  if (params?.limit) query.set('limit', String(params.limit));
-  if (params?.status) query.set('status', params.status);
-  const res = await fetch(`${API_BASE}/orders?${query}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch orders');
-  return res.json();
-}
-
-export async function closePosition(symbol: string) {
-  const res = await fetch(`${API_BASE}/positions/${symbol}`, {
-    method: 'DELETE',
-  });
-  if (!res.ok) throw new Error('Failed to close position');
-  return res.json();
-}
-
-export async function closeAllPositions() {
-  const res = await fetch(`${API_BASE}/positions`, {
-    method: 'DELETE',
-  });
-  if (!res.ok) throw new Error('Failed to close all positions');
-  return res.json();
-}
-
-export async function updatePositionSlTp(symbol: string, stopLoss?: number, takeProfit?: number) {
-  const res = await fetch(`${API_BASE}/positions/${symbol}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ stopLoss, takeProfit }),
-  });
-  if (!res.ok) throw new Error('Failed to update position SL/TP');
-  return res.json();
+  throw new Error('Orders list API not implemented yet (Phase 4 deferred)');
 }
 
 // ============================================================
@@ -116,33 +100,31 @@ export async function updatePositionSlTp(symbol: string, stopLoss?: number, take
 // ============================================================
 
 export async function fetchMlModels() {
-  const res = await fetch(`${API_BASE}/ml/models`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch ML models');
-  return res.json();
+  return getJson('/ml/models');
 }
 
 export async function retrainModel(symbol: string) {
-  const res = await fetch(`${API_BASE}/ml/train/${symbol}`, {
-    method: 'POST',
-  });
-  if (!res.ok) throw new Error('Failed to retrain model');
-  return res.json();
+  return sendJson(`/ml/train/${encodeURIComponent(symbol)}`, 'POST');
 }
 
 export async function fetchModelInfo(symbol: string) {
-  const res = await fetch(`${API_BASE}/ml/model/${symbol}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch model info');
-  return res.json();
+  return getJson(`/ml/model/${encodeURIComponent(symbol)}`);
+}
+
+export async function fetchMlPredictions() {
+  return getJson('/ml/predictions');
+}
+
+export async function fetchMlHealth() {
+  return getJson('/ml/health');
 }
 
 // ============================================================
 // Performance
 // ============================================================
 
-export async function fetchPerformanceStats() {
-  const res = await fetch(`${API_BASE}/performance/stats`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch performance stats');
-  return res.json();
+export async function fetchPerformanceStats(period: '1d' | '1w' | '1m' | 'all' = 'all') {
+  return getJson(`/performance/stats?period=${period}`);
 }
 
 export async function fetchTradeHistory(params?: {
@@ -156,15 +138,12 @@ export async function fetchTradeHistory(params?: {
   if (params?.startDate) query.set('startDate', params.startDate);
   if (params?.endDate) query.set('endDate', params.endDate);
   if (params?.limit) query.set('limit', String(params.limit));
-  const res = await fetch(`${API_BASE}/performance/trades?${query}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch trade history');
-  return res.json();
+  const qs = query.toString();
+  return getJson(`/performance/trades${qs ? `?${qs}` : ''}`);
 }
 
 export async function fetchEquityCurve() {
-  const res = await fetch(`${API_BASE}/performance/equity-curve`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch equity curve');
-  return res.json();
+  return getJson('/performance/equity-curve');
 }
 
 // ============================================================
@@ -172,9 +151,7 @@ export async function fetchEquityCurve() {
 // ============================================================
 
 export async function fetchSystemHealth() {
-  const res = await fetch(`${API_BASE}/system/health`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch system health');
-  return res.json();
+  return getJson('/system/health');
 }
 
 export async function fetchLogs(params?: {
@@ -186,74 +163,38 @@ export async function fetchLogs(params?: {
   if (params?.level) query.set('level', params.level);
   if (params?.limit) query.set('limit', String(params.limit));
   if (params?.source) query.set('source', params.source);
-  const res = await fetch(`${API_BASE}/system/logs?${query}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch logs');
-  return res.json();
+  const qs = query.toString();
+  return getJson(`/system/logs${qs ? `?${qs}` : ''}`);
 }
 
 // ============================================================
-// Strategies
+// Strategies / Account / Config — Phase 4 deferred
 // ============================================================
 
 export async function fetchStrategies() {
-  const res = await fetch(`${API_BASE}/strategies`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch strategies');
-  return res.json();
+  throw new Error('Strategies API not implemented yet (Phase 4 deferred)');
 }
 
-export async function saveStrategy(strategy: Record<string, any>) {
-  const res = await fetch(`${API_BASE}/strategies`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(strategy),
-  });
-  if (!res.ok) throw new Error('Failed to save strategy');
-  return res.json();
+export async function saveStrategy(_strategy: Record<string, unknown>) {
+  throw new Error('Strategies API not implemented yet (Phase 4 deferred)');
 }
 
-export async function toggleStrategy(id: string, enabled: boolean) {
-  const res = await fetch(`${API_BASE}/strategies/${id}/toggle`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  });
-  if (!res.ok) throw new Error('Failed to toggle strategy');
-  return res.json();
+export async function toggleStrategy(_id: string, _enabled: boolean) {
+  throw new Error('Strategies API not implemented yet (Phase 4 deferred)');
 }
-
-// ============================================================
-// Account
-// ============================================================
 
 export async function fetchAccountBalance() {
-  const res = await fetch(`${API_BASE}/account/balance`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to fetch account balance');
-  return res.json();
+  throw new Error('Account balance API not implemented yet (Phase 4 deferred)');
 }
 
 export async function testConnection() {
-  const res = await fetch(`${API_BASE}/account/test-connection`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Connection test failed');
-  return res.json();
+  throw new Error('Connection test API not implemented yet (Phase 4 deferred)');
 }
-
-// ============================================================
-// Configuration Export/Import
-// ============================================================
 
 export async function exportConfig() {
-  const res = await fetch(`${API_BASE}/config/export`, { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to export config');
-  return res.blob();
+  throw new Error('Config export not implemented yet (Phase 4 deferred)');
 }
 
-export async function importConfig(configFile: File) {
-  const formData = new FormData();
-  formData.append('config', configFile);
-  const res = await fetch(`${API_BASE}/config/import`, {
-    method: 'POST',
-    body: formData,
-  });
-  if (!res.ok) throw new Error('Failed to import config');
-  return res.json();
+export async function importConfig(_configFile: File) {
+  throw new Error('Config import not implemented yet (Phase 4 deferred)');
 }

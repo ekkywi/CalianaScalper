@@ -116,14 +116,19 @@ export class MarketOrchestrator {
         const symbol = candle.symbol;
         this.logger.log(`[SINYAL] BUY ${symbol} dengan keyakinan ${(confidence * 100).toFixed(1)}%`);
 
-        // Get account balance
         const balance = await this.executionService.getBalance('USDT');
         if (!balance) {
             this.logger.error(`[ORCHESTRATOR] Gagal mendapatkan saldo untuk eksekusi BUY ${symbol}`);
             return;
         }
 
-        // Calculate position size based on risk management
+        // Track equity / drawdown before trading
+        const drawdownOk = await this.positionManager.updateEquityAndCheckDrawdown(balance.total);
+        if (!drawdownOk) {
+            this.logger.warn(`[ORCHESTRATOR] Drawdown breach — skip BUY ${symbol}`);
+            return;
+        }
+
         const entryPrice = candle.close;
         const positionSize = this.positionManager.calculatePositionSize(balance, entryPrice);
 
@@ -132,28 +137,49 @@ export class MarketOrchestrator {
             return;
         }
 
-        // Execute the order
-        const orderResult = await this.executionService.executeMarketOrder(symbol, 'buy', positionSize);
+        // Pre-flight risk checks BEFORE sending order to exchange
+        const gate = await this.positionManager.canOpenPosition(
+            symbol,
+            entryPrice,
+            positionSize,
+            balance,
+        );
+        if (!gate.allowed) {
+            this.logger.warn(
+                `[ORCHESTRATOR] BUY ${symbol} ditolak pre-flight: ${gate.reason}`,
+            );
+            return;
+        }
+
+        const orderResult = await this.executionService.executeMarketOrder(
+            symbol,
+            'buy',
+            positionSize,
+        );
 
         if (!orderResult) {
             this.logger.error(`[ORCHESTRATOR] Order BUY ${symbol} gagal dieksekusi.`);
             return;
         }
 
-        // Track position in PositionManager
         const avgPrice = orderResult.averagePrice > 0 ? orderResult.averagePrice : entryPrice;
+        const filledQty =
+            orderResult.filledQuantity > 0 ? orderResult.filledQuantity : positionSize;
+
         const position = await this.positionManager.openPosition(
             symbol,
             'LONG',
             avgPrice,
-            orderResult.filledQuantity,
+            filledQty,
             balance,
         );
 
         if (!position) {
-            this.logger.warn(`[ORCHESTRATOR] Posisi ${symbol} tidak tercatat (risk check gagal setelah order).`);
-            // Note: Order sudah terkirim, tapi posisi tidak tercatat karena risk check.
-            // Ini perlu di-handle dengan cancel order atau manual review.
+            // Order filled but ledger open failed — attempt immediate flatten to avoid ghost exposure
+            this.logger.error(
+                `[ORCHESTRATOR] Posisi ${symbol} gagal tercatat setelah fill — mencoba flatten darurat`,
+            );
+            await this.executionService.closePosition(symbol, filledQty);
         }
     }
 
@@ -161,27 +187,21 @@ export class MarketOrchestrator {
         const symbol = candle.symbol;
         this.logger.log(`[SINYAL] SELL ${symbol} dengan keyakinan ${(confidence * 100).toFixed(1)}%`);
 
-        // Check if we have an open position to close
         const existingPosition = this.positionManager.getPosition(symbol);
-        
-        if (existingPosition && existingPosition.status === 'OPEN') {
-            // Close existing position
-            this.logger.log(`[ORCHESTRATOR] Menutup posisi ${symbol} berdasarkan sinyal SELL.`);
-            
-            const orderResult = await this.executionService.executeMarketOrder(
-                symbol, 
-                'sell', 
-                existingPosition.quantity,
-            );
 
-            if (orderResult) {
-                const closePrice = orderResult.averagePrice > 0 ? orderResult.averagePrice : candle.close;
-                await this.positionManager.closePosition(symbol, closePrice, 'CLOSED_BY_SIGNAL');
+        if (existingPosition && existingPosition.status === 'OPEN') {
+            this.logger.log(`[ORCHESTRATOR] Menutup posisi ${symbol} berdasarkan sinyal SELL.`);
+            const closed = await this.positionManager.flattenAndClose(
+                symbol,
+                candle.close,
+                'CLOSED_BY_SIGNAL',
+            );
+            if (!closed) {
+                this.logger.error(`[ORCHESTRATOR] Gagal menutup ${symbol} via sinyal SELL`);
             }
         } else {
-            // In spot mode, we can't short sell. Log warning.
             this.logger.warn(
-                `[ORCHESTRATOR] Sinyal SELL untuk ${symbol} diabaikan (mode spot, tidak ada posisi LONG terbuka).`
+                `[ORCHESTRATOR] Sinyal SELL untuk ${symbol} diabaikan (mode spot, tidak ada posisi LONG terbuka).`,
             );
         }
     }

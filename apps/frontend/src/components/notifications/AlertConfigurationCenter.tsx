@@ -32,10 +32,7 @@ interface Rule {
 }
 
 export default function AlertConfigurationCenter() {
-  const [rules, setRules] = useState<Rule[]>([
-    { id: '1', triggerType: 'price_above', symbol: 'BTCUSDT', condition: '70000', channel: 'in_app', enabled: true },
-    { id: '2', triggerType: 'drawdown', symbol: '', condition: '10', channel: 'telegram', enabled: true },
-  ]);
+  const [rules, setRules] = useState<Rule[]>([]);
 
   const addRule = () => {
     setRules((prev) => [
@@ -61,7 +58,9 @@ export default function AlertConfigurationCenter() {
           </div>
           <div>
             <h2 className="text-sm font-semibold text-white">Alert Rules</h2>
-            <p className="text-[10px] text-slate-500">{rules.length} rules configured</p>
+            <p className="text-[10px] text-slate-500">
+              {rules.length} local draft rules · persistence / channels deferred (Phase 4)
+            </p>
           </div>
         </div>
         <button
