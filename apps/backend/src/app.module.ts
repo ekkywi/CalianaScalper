@@ -21,6 +21,7 @@ import { RiskModule } from './application/risk/risk.module';
 import { PerformanceModule } from './application/performance/performance.module';
 import { MlModule } from './application/ml/ml.module';
 import { SystemModule } from './application/system/system.module';
+import { OrdersModule } from './application/orders/orders.module';
 import { join } from 'path';
 
 @Module({
@@ -71,6 +72,7 @@ import { join } from 'path';
     PerformanceModule,
     MlModule,
     SystemModule,
+    OrdersModule,
   ],
   controllers: [
     AppController,

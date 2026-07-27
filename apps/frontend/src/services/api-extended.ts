@@ -17,7 +17,16 @@ async function sendJson(path: string, method: string, body?: unknown) {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(text || `Request failed: ${path} (${res.status})`);
+    let msg = text || `Request failed: ${path} (${res.status})`;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed?.message) {
+        msg = Array.isArray(parsed.message) ? parsed.message.join(', ') : String(parsed.message);
+      }
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(msg);
   }
   return res.json();
 }
@@ -77,22 +86,27 @@ export async function updatePositionSlTp(
 // Orders & Trading (Phase 4 deferred — stubs throw clearly)
 // ============================================================
 
-export async function placeOrder(_order: {
+export async function placeOrder(order: {
   symbol: string;
   side: 'buy' | 'sell';
   type: 'MARKET' | 'LIMIT' | 'STOP_LOSS';
   quantity: number;
   price?: number;
 }) {
-  throw new Error('Manual orders API not implemented yet (Phase 4 deferred)');
+  return sendJson('/orders', 'POST', order);
 }
 
-export async function fetchOrders(_params?: {
+export async function fetchOrders(params?: {
   symbol?: string;
   limit?: number;
   status?: string;
 }) {
-  throw new Error('Orders list API not implemented yet (Phase 4 deferred)');
+  const query = new URLSearchParams();
+  if (params?.symbol) query.set('symbol', params.symbol);
+  if (params?.limit) query.set('limit', String(params.limit));
+  if (params?.status) query.set('status', params.status);
+  const qs = query.toString();
+  return getJson(`/orders${qs ? `?${qs}` : ''}`);
 }
 
 // ============================================================

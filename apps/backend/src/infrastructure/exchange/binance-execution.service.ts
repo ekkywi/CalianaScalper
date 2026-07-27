@@ -199,6 +199,13 @@ export class BinanceExecutionService {
     }
 
     /**
+     * Public last price helper for sizing / risk pre-checks
+     */
+    async getLastPrice(symbol: string): Promise<number> {
+        return this.getCurrentPrice(symbol);
+    }
+
+    /**
      * Get current price for a symbol
      */
     private async getCurrentPrice(symbol: string): Promise<number> {
@@ -235,6 +242,100 @@ export class BinanceExecutionService {
         } catch (error) {
             this.logger.error(`[CANCEL] Gagal membatalkan order ${orderId}: ${error.message}`);
             return false;
+        }
+    }
+
+    /**
+     * Place a limit order (spot sandbox).
+     */
+    async executeLimitOrder(
+        symbol: string,
+        side: 'buy' | 'sell',
+        amount: number,
+        price: number,
+    ): Promise<OrderResult | null> {
+        try {
+            if (amount <= 0 || price <= 0) {
+                this.logger.error(
+                    `[EKSEKUSI] Limit order invalid amount=${amount} price=${price}`,
+                );
+                return null;
+            }
+
+            const requiredAsset = side === 'buy' ? 'USDT' : symbol.replace('USDT', '');
+            const balance = await this.getBalance(requiredAsset);
+            if (!balance) {
+                this.logger.error(`[EKSEKUSI] Gagal mendapatkan saldo untuk ${requiredAsset}`);
+                return null;
+            }
+
+            if (side === 'buy') {
+                const estimatedCost = amount * price;
+                if (balance.free < estimatedCost) {
+                    this.logger.error(
+                        `[EKSEKUSI] Saldo USDT tidak cukup untuk LIMIT BUY. ` +
+                        `Butuh ~${estimatedCost}, tersedia ${balance.free}`,
+                    );
+                    return null;
+                }
+            } else if (balance.free < amount) {
+                this.logger.error(
+                    `[EKSEKUSI] Saldo ${requiredAsset} tidak cukup untuk LIMIT SELL`,
+                );
+                return null;
+            }
+
+            this.logger.log(
+                `[EKSEKUSI] Mengirim Limit ${side.toUpperCase()} ${amount} ${symbol} @ ${price}`,
+            );
+
+            const order = await this.exchange.createLimitOrder(symbol, side, amount, price);
+
+            const orderResult: OrderResult = {
+                id: String(order.id || ''),
+                symbol: String(order.symbol || symbol),
+                side: (String(order.side) || side) as 'buy' | 'sell',
+                type: 'LIMIT',
+                quantity: Number(order.amount) || amount,
+                filledQuantity: Number(order.filled) || 0,
+                price: Number(order.price) || price,
+                averagePrice: Number(order.average) || 0,
+                status: this.mapOrderStatus(String(order.status)),
+                timestamp: Number(order.timestamp) || Date.now(),
+            };
+
+            await this.orderRepo.save({
+                symbol: orderResult.symbol.includes('/')
+                    ? symbol
+                    : orderResult.symbol,
+                side: orderResult.side,
+                type: orderResult.type,
+                quantity: orderResult.quantity,
+                filledQuantity: orderResult.filledQuantity,
+                price: orderResult.price,
+                averagePrice: orderResult.averagePrice,
+                status: orderResult.status,
+                timestamp: orderResult.timestamp,
+                exchangeOrderId: orderResult.id,
+            });
+
+            if (orderResult.status === 'FILLED') {
+                this.eventEmitter.emit(MARKET_EVENTS.ORDER_FILLED, orderResult);
+            }
+
+            return orderResult;
+        } catch (error) {
+            this.logger.error(
+                `[GAGAL] Limit ${side.toUpperCase()} ${amount} ${symbol}: ${error.message}`,
+            );
+            this.eventEmitter.emit(MARKET_EVENTS.ORDER_REJECTED, {
+                symbol,
+                side,
+                amount,
+                error: error.message,
+                timestamp: Date.now(),
+            });
+            return null;
         }
     }
 

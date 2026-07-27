@@ -695,6 +695,34 @@ export class PositionManagerService implements OnModuleInit {
     }
 
     /**
+     * Reduce open position quantity after a partial sell (persisted).
+     */
+    async reduceOpenQuantity(symbol: string, soldQty: number): Promise<Position | null> {
+        const position = this.positionsCache.get(symbol);
+        if (!position || position.status !== 'OPEN') {
+            return null;
+        }
+        const remaining = Number(position.quantity) - soldQty;
+        if (remaining <= 1e-12) {
+            const price = Number(position.entryPrice);
+            return this.closePosition(symbol, price, 'CLOSED_BY_MANUAL');
+        }
+        position.quantity = remaining;
+        try {
+            await this.positionRepo.update(
+                { symbol, status: 'OPEN' },
+                { quantity: remaining },
+            );
+        } catch (err) {
+            this.logger.error(`[DB] Failed to reduce qty ${symbol}: ${err.message}`);
+            return null;
+        }
+        this.positionsCache.set(symbol, position);
+        this.logger.log(`[POSITION] Reduced ${symbol} qty by ${soldQty} → ${remaining}`);
+        return position;
+    }
+
+    /**
      * Update SL/TP levels on an open position (persisted). Used by UI.
      */
     async updatePositionLevels(
