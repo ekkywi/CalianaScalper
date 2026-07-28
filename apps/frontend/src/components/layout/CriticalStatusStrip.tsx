@@ -4,7 +4,12 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { formatUSD, getChangeColor } from '@/lib/utils';
-import { emergencyStopAll, fetchPositions } from '@/services/api-extended';
+import {
+  emergencyStopAll,
+  fetchAccountBalance,
+  fetchPositions,
+  type AccountBalanceResponse,
+} from '@/services/api-extended';
 import { socket } from '@/services/socket';
 import { useAppStore } from '@/store/app-store';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -17,15 +22,22 @@ type PositionRow = {
   unrealizedPnL: number;
 };
 
+function safeMoney(n: unknown): number | null {
+  const v = Number(n);
+  return Number.isFinite(v) ? v : null;
+}
+
 export default function CriticalStatusStrip() {
   const { isEmergencyStopped, setEmergencyStopped, setTradingHalted, addAlert, addLog } =
     useAppStore();
   const [positions, setPositions] = useState<PositionRow[]>([]);
+  const [balance, setBalance] = useState<AccountBalanceResponse | null>(null);
+  const [balanceError, setBalanceError] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const loadPositions = useCallback(async () => {
     try {
       const data = await fetchPositions();
       setPositions(Array.isArray(data) ? data : []);
@@ -34,9 +46,23 @@ export default function CriticalStatusStrip() {
     }
   }, []);
 
+  const loadBalance = useCallback(async () => {
+    try {
+      const data = await fetchAccountBalance();
+      setBalance(data);
+      setBalanceError(false);
+    } catch {
+      setBalanceError(true);
+    }
+  }, []);
+
   useEffect(() => {
-    load();
-    const onChange = () => load();
+    loadPositions();
+    loadBalance();
+    const onChange = () => {
+      loadPositions();
+      loadBalance();
+    };
     const onPrice = (candle: { symbol: string; close: number }) => {
       setPositions((prev) =>
         prev.map((p) => {
@@ -52,17 +78,23 @@ export default function CriticalStatusStrip() {
     socket.on('position-opened', onChange);
     socket.on('position-closed', onChange);
     socket.on('realtime-price', onPrice);
-    const interval = setInterval(load, 15000);
+    socket.on('trading-mode-changed', loadBalance);
+    const interval = setInterval(() => {
+      loadPositions();
+      loadBalance();
+    }, 15000);
     return () => {
       socket.off('position-opened', onChange);
       socket.off('position-closed', onChange);
       socket.off('realtime-price', onPrice);
+      socket.off('trading-mode-changed', loadBalance);
       clearInterval(interval);
     };
-  }, [load]);
+  }, [loadPositions, loadBalance]);
 
   const totalPnl = positions.reduce((sum, p) => sum + (Number(p.unrealizedPnL) || 0), 0);
-  const pnlPositive = totalPnl >= 0;
+  const free = safeMoney(balance?.free);
+  const modeLabel = balance?.mode === 'live' ? 'live' : balance?.mode === 'paper' ? 'paper' : null;
 
   const handleEmergencyStop = async () => {
     setLoading(true);
@@ -112,7 +144,7 @@ export default function CriticalStatusStrip() {
             <div>
               <p className="text-[10px] text-slate-500 uppercase tracking-wider">Open P&L</p>
               <p className={`text-sm font-semibold font-mono tabular-nums ${getChangeColor(totalPnl)}`}>
-                {pnlPositive ? '+' : ''}
+                {totalPnl >= 0 ? '+' : ''}
                 {formatUSD(totalPnl).replace('$', '')} USDT
               </p>
             </div>
@@ -126,6 +158,18 @@ export default function CriticalStatusStrip() {
                 >
                   View
                 </Link>
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-500 uppercase tracking-wider">
+                Free USDT{modeLabel ? ` · ${modeLabel}` : ''}
+              </p>
+              <p className="text-sm font-semibold text-white font-mono tabular-nums">
+                {free != null
+                  ? formatUSD(free).replace('$', '')
+                  : balanceError
+                    ? 'N/A'
+                    : '—'}
               </p>
             </div>
             {isEmergencyStopped && (

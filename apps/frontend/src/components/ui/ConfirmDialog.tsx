@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
 
 type ConfirmDialogProps = {
@@ -13,6 +13,8 @@ type ConfirmDialogProps = {
   loading?: boolean;
   /** When set, user must type this exact string before Confirm enables */
   requireTypedConfirm?: string;
+  /** Optional extra content (e.g. checkbox) between description and actions */
+  children?: ReactNode;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -26,6 +28,7 @@ export default function ConfirmDialog({
   variant = 'default',
   loading = false,
   requireTypedConfirm,
+  children,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -71,6 +74,7 @@ export default function ConfirmDialog({
           {title}
         </h3>
         <p className="text-xs text-slate-400 mb-4 leading-relaxed">{description}</p>
+        {children && <div className="mb-4">{children}</div>}
         {requireTypedConfirm && (
           <div className="mb-5">
             <label className="text-[10px] text-slate-500 block mb-1.5">
