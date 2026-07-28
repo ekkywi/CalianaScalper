@@ -1,5 +1,5 @@
 // apps/frontend/src/components/risk/RiskParametersDashboard.tsx
-// Panel untuk mengatur parameter risiko global — TERHUBUNG ke backend API
+// Portfolio risk only — SL/TP live on Trading Profiles
 
 'use client';
 
@@ -7,8 +7,11 @@ import { useState, useEffect } from 'react';
 import { useAppStore } from '@/store/app-store';
 import { Shield, AlertTriangle, Save, Loader2, Check } from 'lucide-react';
 import { fetchRiskConfig, updateRiskConfig } from '@/services/api-extended';
+import Link from 'next/link';
+import { useToast } from '@/components/ui/toast';
 
 export default function RiskParametersDashboard() {
+  const { success, error: toastError } = useToast();
   const { riskConfig, setRiskConfig } = useAppStore();
   const [localConfig, setLocalConfig] = useState({ ...riskConfig });
   const [saving, setSaving] = useState(false);
@@ -37,12 +40,16 @@ export default function RiskParametersDashboard() {
     setError(null);
     setSaved(false);
     try {
+      // Strip deprecated SL/TP from payload awareness — still persist if present in local
       await updateRiskConfig(localConfig);
       setRiskConfig(localConfig);
       setSaved(true);
+      success('Risk configuration saved');
       setTimeout(() => setSaved(false), 2000);
     } catch (err: any) {
-      setError(err.message || 'Failed to save risk config');
+      const msg = err.message || 'Failed to save risk config';
+      setError(msg);
+      toastError('Save failed', msg);
     } finally {
       setSaving(false);
     }
@@ -112,7 +119,9 @@ export default function RiskParametersDashboard() {
           </div>
           <div>
             <h2 className="text-sm font-semibold text-white">Risk Parameters</h2>
-            <p className="text-[10px] text-slate-500">Global risk management settings</p>
+            <p className="text-[10px] text-slate-500">
+              Account / portfolio limits only — no SL/TP here
+            </p>
           </div>
         </div>
         <button
@@ -153,22 +162,6 @@ export default function RiskParametersDashboard() {
           value={localConfig.maxPositionSizePercent}
           onChange={(v) => setLocalConfig((p) => ({ ...p, maxPositionSizePercent: v }))}
           max={20}
-          suffix="%"
-        />
-        <SliderInput
-          label="Stop Loss"
-          unitHint="%"
-          value={localConfig.stopLossPercent}
-          onChange={(v) => setLocalConfig((p) => ({ ...p, stopLossPercent: v }))}
-          max={15}
-          suffix="%"
-        />
-        <SliderInput
-          label="Take Profit"
-          unitHint="%"
-          value={localConfig.takeProfitPercent}
-          onChange={(v) => setLocalConfig((p) => ({ ...p, takeProfitPercent: v }))}
-          max={30}
           suffix="%"
         />
         <SliderInput
@@ -227,7 +220,7 @@ export default function RiskParametersDashboard() {
 
       <div className="mt-4 pt-4 border-t border-slate-800 space-y-3">
         <p className="text-[10px] uppercase tracking-wider text-slate-500 font-medium">
-          ML strategy (Phase 2)
+          ML strategy gates
         </p>
         <label className="flex items-start gap-2 cursor-pointer select-none">
           <input
@@ -252,15 +245,23 @@ export default function RiskParametersDashboard() {
             className="mt-0.5 rounded border-slate-600 bg-slate-800 text-amber-500"
           />
           <span className="text-xs text-slate-300 leading-relaxed">
-            Shadow mode — log would-be BUY orders without executing (paper-safe testing)
+            Shadow mode — log would-be BUY orders without executing (see{' '}
+            <Link href="/dashboard/ml-shadow" className="text-sky-400 underline">
+              ML Shadow Log
+            </Link>
+            )
           </span>
         </label>
       </div>
 
-      <div className="mt-4 flex items-start gap-2 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">
-        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-        <p className="text-[11px] text-amber-400/80">
-          Changes to risk parameters are applied immediately after save. High risk values can lead to significant losses.
+      <div className="mt-4 flex items-start gap-2 p-3 bg-sky-500/5 border border-sky-500/20 rounded-lg">
+        <AlertTriangle className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+        <p className="text-[11px] text-sky-300/80">
+          Stop loss & take profit are configured per symbol on{' '}
+          <Link href="/dashboard/trading-profiles" className="text-sky-400 underline">
+            Trading Profiles
+          </Link>
+          . Models are trained under ML Training and activated under ML Models.
         </p>
       </div>
     </div>

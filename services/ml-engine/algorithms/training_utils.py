@@ -23,3 +23,10 @@ def chronological_split(
         y.iloc[split_idx:],
         split_idx,
     )
+
+
+def train_has_both_classes(y_train: pd.Series) -> bool:
+    """Binary classifiers need ≥1 sample of each class in the fit set."""
+    if y_train is None or len(y_train) == 0:
+        return False
+    return int(y_train.nunique()) >= 2

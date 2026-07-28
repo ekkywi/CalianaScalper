@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { fetchSymbols, deleteSymbol } from '@/services/api';
 import { deleteMlModel } from '@/services/api-extended';
+import { deleteStrategyModel, fetchStrategyModels } from '@/services/api-strategy';
 import { fetchMultiple24hrTickers } from '@/services/binance-rest';
 import { binanceTickerWS, TickerData } from '@/services/binance-ws';
 import { socket } from '@/services/socket';
@@ -64,6 +65,7 @@ const QUICK_LINKS = [
   { href: '/dashboard/risk', label: 'Risk', icon: Shield },
   { href: '/dashboard/performance', label: 'Performance', icon: BarChart3 },
   { href: '/dashboard/ml-models', label: 'ML Models', icon: Brain },
+  { href: '/dashboard/ml-predictions', label: 'Predictions', icon: TrendingUp },
   { href: '/dashboard/notifications', label: 'Alerts', icon: Bell },
   { href: '/dashboard/health', label: 'Health', icon: Activity },
 ];
@@ -167,7 +169,12 @@ export default function DashboardPage() {
       setAlsoDeleteMl(false);
       if (alsoDeleteMl) {
         try {
-          await deleteMlModel(target.symbol);
+          const { models } = await fetchStrategyModels(target.symbol);
+          for (const m of models) {
+            await deleteStrategyModel(m.id);
+          }
+          // Clear any leftover hot artifact if library was already empty
+          await deleteMlModel(target.symbol).catch(() => undefined);
         } catch (err: any) {
           setDeleteError(
             err?.message ||

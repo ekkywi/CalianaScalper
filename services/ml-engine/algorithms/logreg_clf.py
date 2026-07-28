@@ -14,7 +14,7 @@ from sklearn.preprocessing import StandardScaler
 from eval_metrics import classification_metrics
 from algorithms.base import BaseAlgorithm
 from algorithms.prob_utils import prob_up_from_proba
-from algorithms.training_utils import chronological_split
+from algorithms.training_utils import chronological_split, train_has_both_classes
 
 
 class LogisticRegressionPlugin(BaseAlgorithm):
@@ -39,7 +39,18 @@ class LogisticRegressionPlugin(BaseAlgorithm):
         )
 
         X_train, X_val, y_train, y_val, split_idx = chronological_split(X, y)
-        if split_idx < 1 or split_idx >= len(X):
+        use_val = (
+            split_idx > 0
+            and split_idx < len(X)
+            and len(y_val) > 0
+            and train_has_both_classes(y_train)
+        )
+
+        if not use_val:
+            if not train_has_both_classes(y):
+                raise ValueError(
+                    "Logistic regression needs both BUY and SL labels in the training set."
+                )
             model.fit(X, y)
             return model, {
                 "accuracy": None,
@@ -49,7 +60,10 @@ class LogisticRegressionPlugin(BaseAlgorithm):
 
         model.fit(X_train, y_train)
         val_probs = np.array(
-            [prob_up_from_proba(model.predict_proba(X_val.iloc[i : i + 1])) for i in range(len(X_val))]
+            [
+                prob_up_from_proba(self.predict_proba(model, X_val.iloc[i : i + 1]))
+                for i in range(len(X_val))
+            ]
         )
         val_preds = (val_probs >= 0.5).astype(int)
         cls_metrics = classification_metrics(y_val, val_preds)
@@ -60,4 +74,17 @@ class LogisticRegressionPlugin(BaseAlgorithm):
         }
 
     def predict_proba(self, model: Any, X_row: pd.DataFrame) -> np.ndarray:
-        return np.asarray(model.predict_proba(X_row)[0], dtype=float)
+        raw = np.asarray(model.predict_proba(X_row), dtype=float)
+        row = raw[0] if raw.ndim >= 2 else raw
+        # Pad to [P0, P1] when sklearn only fitted one class
+        clf = model.named_steps.get("clf") if hasattr(model, "named_steps") else None
+        classes = getattr(clf, "classes_", None) if clf is not None else None
+        if classes is not None and len(classes) == 1:
+            p = float(row.ravel()[0]) if row.size else 0.0
+            if int(classes[0]) == 1:
+                return np.array([1.0 - p, p], dtype=float)
+            return np.array([p, 1.0 - p], dtype=float)
+        out = np.asarray(row, dtype=float).ravel()
+        if out.size == 1:
+            return np.array([1.0 - out[0], out[0]], dtype=float)
+        return out

@@ -21,9 +21,13 @@ import { MarketController } from './application/market/market.controller';
 import { RiskModule } from './application/risk/risk.module';
 import { PerformanceModule } from './application/performance/performance.module';
 import { MlModule } from './application/ml/ml.module';
+import { StrategyModule } from './application/strategy/strategy.module';
 import { SystemModule } from './application/system/system.module';
 import { OrdersModule } from './application/orders/orders.module';
 import { join } from 'path';
+import { TradingProfileEntity } from './infrastructure/database/trading-profile.entity';
+import { MlModelRegistryEntity } from './infrastructure/database/ml-model-registry.entity';
+import { SymbolStrategyBindingEntity } from './infrastructure/database/symbol-strategy-binding.entity';
 
 @Module({
   imports: [
@@ -60,8 +64,18 @@ import { join } from 'path';
           password: pass,
           database: name,
           
-          entities: [CandleEntity, SymbolEntity, OrderEntity, PositionEntity, TradeEntity, SystemConfigEntity], 
-          synchronize: true, 
+          entities: [
+            CandleEntity,
+            SymbolEntity,
+            OrderEntity,
+            PositionEntity,
+            TradeEntity,
+            SystemConfigEntity,
+            TradingProfileEntity,
+            MlModelRegistryEntity,
+            SymbolStrategyBindingEntity,
+          ],
+          synchronize: true,
         };
       },
     }),
@@ -72,6 +86,7 @@ import { join } from 'path';
     RiskModule,
     PerformanceModule,
     MlModule,
+    StrategyModule,
     SystemModule,
     OrdersModule,
   ],

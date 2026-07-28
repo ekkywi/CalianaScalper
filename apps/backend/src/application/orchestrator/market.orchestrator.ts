@@ -1,6 +1,6 @@
 // src/application/orchestrator/market.orchestrator.ts
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { MARKET_EVENTS, type CandleData } from '../../core/domain/market.types';
 import { MlEngineService } from '../../infrastructure/ml/ml-engine.service';
@@ -8,6 +8,7 @@ import type { MlPrediction } from '../../infrastructure/ml/ml-engine.service';
 import { MlShadowService } from '../../infrastructure/ml/ml-shadow.service';
 import { BinanceExecutionService } from '../../infrastructure/exchange/binance-execution.service';
 import { PositionManagerService } from '../../infrastructure/risk/position-manager.service';
+import { StrategyService } from '../../infrastructure/strategy/strategy.service';
 import { SymbolService } from '../symbol/symbol.service';
 
 @Injectable()
@@ -24,6 +25,8 @@ export class MarketOrchestrator {
         private readonly executionService: BinanceExecutionService,
         private readonly positionManager: PositionManagerService,
         private readonly symbolService: SymbolService,
+        @Inject(forwardRef(() => StrategyService))
+        private readonly strategy: StrategyService,
     ) {}
 
     @OnEvent(MARKET_EVENTS.CANDLE_CLOSED)
@@ -92,6 +95,22 @@ export class MarketOrchestrator {
                 return;
             }
 
+            // STEP 6b: Strategy pair guard — profile + model must align (paper = live)
+            if (prediction.signal === 'BUY') {
+                const pair = await this.strategy.getPairStatus(candle.symbol);
+                if (pair.blockBuy) {
+                    this.logger.warn(
+                        `[STRATEGY] BUY ${candle.symbol} blocked — ${pair.message}`,
+                    );
+                    this.mlShadow.record(candle, prediction, {
+                        effectiveMinConfidence: gate.effectiveMinConfidence,
+                        blockedBy: 'drift',
+                        wouldExecute: true,
+                    });
+                    return;
+                }
+            }
+
             // STEP 7: Execute trade based on signal
             if (prediction.signal === 'BUY') {
                 await this.executeBuySignal(candle, prediction);
@@ -142,7 +161,7 @@ export class MarketOrchestrator {
         recordShadow: boolean;
         wouldExecute: boolean;
         effectiveMinConfidence: number;
-        blockedBy: 'shadow_mode' | 'regime' | 'confidence' | null;
+        blockedBy: 'shadow_mode' | 'regime' | 'confidence' | 'drift' | null;
         logMessage: string | null;
     } {
         const raw = prediction.raw || {};
@@ -155,7 +174,7 @@ export class MarketOrchestrator {
             effectiveMinConfidence: effectiveMin,
             recordShadow: false,
             wouldExecute: false,
-            blockedBy: null as 'shadow_mode' | 'regime' | 'confidence' | null,
+            blockedBy: null as 'shadow_mode' | 'regime' | 'confidence' | 'drift' | null,
             logMessage: null as string | null,
             allowExecute: true,
         };
@@ -246,7 +265,11 @@ export class MarketOrchestrator {
         }
 
         const entryPrice = candle.close;
-        const positionSize = this.positionManager.calculatePositionSize(balance, entryPrice);
+        const positionSize = this.positionManager.calculatePositionSize(
+            balance,
+            entryPrice,
+            symbol,
+        );
 
         if (positionSize <= 0) {
             this.logger.warn(`[ORCHESTRATOR] Ukuran posisi tidak valid (${positionSize}) untuk ${symbol}`);

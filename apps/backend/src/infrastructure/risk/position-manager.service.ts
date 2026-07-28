@@ -1,7 +1,14 @@
 // apps/backend/src/infrastructure/risk/position-manager.service.ts
 // Position Manager dengan database persistence — menggantikan in-memory Map
 
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+    forwardRef,
+    Inject,
+    Injectable,
+    Logger,
+    OnModuleInit,
+    Optional,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
@@ -19,6 +26,7 @@ import { PositionEntity } from '../database/position.entity';
 import { TradeEntity } from '../database/trade.entity';
 import { SystemConfigEntity } from '../database/system-config.entity';
 import { BinanceExecutionService } from '../exchange/binance-execution.service';
+import { StrategyService } from '../strategy/strategy.service';
 
 @Injectable()
 export class PositionManagerService implements OnModuleInit {
@@ -49,6 +57,9 @@ export class PositionManagerService implements OnModuleInit {
         @InjectRepository(SystemConfigEntity)
         private readonly configRepo: Repository<SystemConfigEntity>,
         private readonly executionService: BinanceExecutionService,
+        @Optional()
+        @Inject(forwardRef(() => StrategyService))
+        private readonly strategy?: StrategyService,
     ) {
         this.riskConfig = { ...DEFAULT_RISK_CONFIG };
     }
@@ -408,11 +419,26 @@ export class PositionManagerService implements OnModuleInit {
     }
 
     /**
-     * Calculate position size based on account balance and risk config
+     * Calculate position size based on account balance and risk config.
+     * Uses active trading profile SL when available.
      */
-    calculatePositionSize(balance: AccountBalance, entryPrice: number): number {
+    calculatePositionSize(
+        balance: AccountBalance,
+        entryPrice: number,
+        symbol?: string,
+    ): number {
         const riskAmount = balance.total * this.riskConfig.maxPositionSizePercent;
-        const stopLossDistance = entryPrice * this.riskConfig.stopLossPercent;
+        const exec = symbol && this.strategy
+            ? this.strategy.getActiveExecutionSync(symbol)
+            : null;
+        if (!exec) {
+            this.logger.warn(
+                `[POSITION-SIZING] No active trading profile for ${symbol ?? '?'} — size=0`,
+            );
+            return 0;
+        }
+        const slPercent = exec.stopLossPercent;
+        const stopLossDistance = entryPrice * slPercent;
         
         const positionSize = riskAmount / stopLossDistance;
         const roundedSize = Math.floor(positionSize * 1000000) / 1000000;
@@ -420,7 +446,7 @@ export class PositionManagerService implements OnModuleInit {
         this.logger.log(
             `[POSITION-SIZING] Balance: ${balance.total} USDT | ` +
             `RiskAmount: ${riskAmount.toFixed(2)} USDT | ` +
-            `EntryPrice: ${entryPrice} | SL Distance: ${stopLossDistance.toFixed(2)} | ` +
+            `EntryPrice: ${entryPrice} | SL ${(slPercent * 100).toFixed(2)}% Distance: ${stopLossDistance.toFixed(2)} | ` +
             `Size: ${roundedSize}`
         );
         
@@ -485,14 +511,21 @@ export class PositionManagerService implements OnModuleInit {
             return null;
         }
 
-        // Calculate SL and TP
+        // Calculate SL and TP from active trading profile (required for auto-bot)
+        const exec = this.strategy?.getActiveExecutionSync(symbol);
+        if (!exec) {
+            this.logger.error(
+                `[RISK] No active trading profile for ${symbol} — cannot open position`,
+            );
+            return null;
+        }
         const stopLoss = side === 'LONG' 
-            ? entryPrice * (1 - this.riskConfig.stopLossPercent)
-            : entryPrice * (1 + this.riskConfig.stopLossPercent);
+            ? entryPrice * (1 - exec.stopLossPercent)
+            : entryPrice * (1 + exec.stopLossPercent);
         
         const takeProfit = side === 'LONG'
-            ? entryPrice * (1 + this.riskConfig.takeProfitPercent)
-            : entryPrice * (1 - this.riskConfig.takeProfitPercent);
+            ? entryPrice * (1 + exec.takeProfitPercent)
+            : entryPrice * (1 - exec.takeProfitPercent);
 
         const position: Position = {
             symbol,

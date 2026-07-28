@@ -227,6 +227,15 @@ export async function fetchMlHealth() {
   return getJson('/ml/health');
 }
 
+/** @deprecated Prefer /api/strategy pair status — kept type alias for older UI snippets */
+export type SymbolDriftReport = {
+  symbol: string;
+  status: 'ok' | 'mismatch' | 'unknown' | 'incomplete';
+  fields: string[];
+  blockBuy: boolean;
+  message?: string;
+};
+
 // ============================================================
 // Performance
 // ============================================================

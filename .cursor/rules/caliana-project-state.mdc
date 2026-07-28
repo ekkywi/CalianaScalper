@@ -21,20 +21,21 @@ Older audits listed MOCK UI and broken emergency flatten. That work was **fixed*
 - Auto loop: candle close → ML predict → risk → market BUY/SELL
 - SL/TP + emergency stop: **exchange flatten first**, then DB (`flattenAndClose`)
 - Risk config persist, `tradingHalted` persist, drawdown enforcement, pre-trade `canOpenPosition`
+- **ML menus:** Training · Models (library) · Predictions · Shadow Log — separate pages; pair mismatch → **block BUY** (paper = live)
 - Paper/Live mode switcher (`TradingModeBanner`, `/api/system/trading-mode`, balance API)
-- Live UI: positions, PnL, trades, performance (basic), risk sliders, ML models/retrain, predictions, health, manual MARKET/LIMIT orders
+- Live UI: positions, PnL, trades, performance (basic), risk, profiles, train, models, predictions, health, manual MARKET/LIMIT orders
 - WS: listen `realtime-price` (not `candle_tick`); also `trading-mode-changed`
 
 ## Deferred (do not fake as done)
 
 - Futures / short; Live unlocked by default (must set env intentionally)
 - STOP_LOSS via manual order form (use position SL/TP)
-- Strategies CRUD, Telegram/Discord/email alerts, structured log store, Sharpe/Sortino engine
+- Strategies marketplace, Telegram/Discord/email alerts, structured log store, Sharpe/Sortino engine
 
 ## Agent conventions
 
 - **User owns process terminals** (Nest / ML / frontend / Postgres). Do not start duplicate services on `3000`/`3001`/`8000` unless the user explicitly asks.
 - Prefer `curl` health checks against already-running services.
 - Do not commit runtime `.pkl` buffers unless asked.
-- Prefer small PRs; safety (exchange flatten, Live gates) over dashboard cosmetics.
+- Prefer small PRs; safety (exchange flatten, Live gates, pair guard) over dashboard cosmetics.
 - Never enable Live without `ALLOW_LIVE_TRADING=true` + mainnet keys.

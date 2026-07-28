@@ -14,7 +14,7 @@ export type ShadowPredictionRecord = {
   effectiveMinConfidence: number;
   timestamp: number;
   candleCloseTime: number;
-  blockedBy: 'shadow_mode' | 'regime' | 'confidence' | null;
+  blockedBy: 'shadow_mode' | 'regime' | 'confidence' | 'drift' | null;
   wouldExecute: boolean;
 };
 

@@ -90,12 +90,19 @@ export class MlEngineService {
     async retrain(
         symbol: string,
         algorithm?: string,
-        labelConfig?: Record<string, number>,
+        labelConfig?: Record<string, number> | {
+            stop_loss_percent: number;
+            take_profit_percent: number;
+            max_horizon_candles?: number;
+        },
+        opts?: { name?: string; setActive?: boolean },
     ): Promise<any | null> {
         try {
             const body: Record<string, unknown> = {};
             if (algorithm) body.algorithm = algorithm;
             if (labelConfig) body.label_config = labelConfig;
+            if (opts?.name) body.name = opts.name;
+            if (opts?.setActive != null) body.set_active = opts.setActive;
             const response = await firstValueFrom(
                 this.httpService.post(`${this.ML_BASE}/train/${symbol}`, body, {
                     timeout: 10000,
@@ -105,6 +112,68 @@ export class MlEngineService {
         } catch (error) {
             this.logger.error(`[ML-ENGINE] Retrain ${symbol} failed: ${error.message}`);
             return null;
+        }
+    }
+
+    async getModelLibrary(): Promise<{ libraries: any[] } | null> {
+        try {
+            const response = await firstValueFrom(
+                this.httpService.get(`${this.ML_BASE}/library`, { timeout: 10000 }),
+            );
+            return response.data;
+        } catch (error: any) {
+            this.logger.warn(`[ML-ENGINE] Library list failed: ${error.message}`);
+            return null;
+        }
+    }
+
+    async getSymbolLibrary(symbol: string): Promise<any | null> {
+        try {
+            const response = await firstValueFrom(
+                this.httpService.get(
+                    `${this.ML_BASE}/library/${encodeURIComponent(symbol)}`,
+                    { timeout: 10000 },
+                ),
+            );
+            return response.data;
+        } catch (error: any) {
+            this.logger.warn(`[ML-ENGINE] Library ${symbol} failed: ${error.message}`);
+            return null;
+        }
+    }
+
+    async activateLibraryModel(symbol: string, modelId: string): Promise<any | null> {
+        try {
+            const response = await firstValueFrom(
+                this.httpService.post(
+                    `${this.ML_BASE}/library/${encodeURIComponent(symbol)}/activate/${encodeURIComponent(modelId)}`,
+                    {},
+                    { timeout: 15000 },
+                ),
+            );
+            return response.data;
+        } catch (error: any) {
+            this.logger.error(
+                `[ML-ENGINE] Activate ${symbol}/${modelId} failed: ${error.message}`,
+            );
+            return null;
+        }
+    }
+
+    async deleteLibraryModel(symbol: string, modelId: string): Promise<any | null> {
+        try {
+            const response = await firstValueFrom(
+                this.httpService.delete(
+                    `${this.ML_BASE}/library/${encodeURIComponent(symbol)}/${encodeURIComponent(modelId)}`,
+                    { timeout: 10000 },
+                ),
+            );
+            return response.data;
+        } catch (error: any) {
+            this.logger.warn(
+                `[ML-ENGINE] Delete library ${symbol}/${modelId}: ${error.message}`,
+            );
+            throw error;
         }
     }
 
@@ -174,7 +243,11 @@ export class MlEngineService {
 
     async getLabelPreview(
         symbol: string,
-        labelConfig?: Record<string, number>,
+        labelConfig?: Record<string, number> | {
+            stop_loss_percent?: number;
+            take_profit_percent?: number;
+            max_horizon_candles?: number;
+        },
     ): Promise<any | null> {
         try {
             const params: Record<string, number> = {};

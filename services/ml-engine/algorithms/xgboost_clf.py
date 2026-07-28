@@ -12,6 +12,7 @@ from xgboost import XGBClassifier
 from eval_metrics import classification_metrics
 
 from algorithms.base import BaseAlgorithm
+from algorithms.training_utils import chronological_split, train_has_both_classes
 
 
 class XGBoostClassifierPlugin(BaseAlgorithm):
@@ -38,9 +39,16 @@ class XGBoostClassifierPlugin(BaseAlgorithm):
             early_stopping_rounds=20,
         )
 
-        split_idx = int(len(X) * 0.8)
-        if split_idx < 1 or split_idx >= len(X):
-            # Too little data for a clean split — train on all, no honest val accuracy
+        X_train, X_val, y_train, y_val, split_idx = chronological_split(X, y)
+        use_val = (
+            split_idx > 0
+            and split_idx < len(X)
+            and len(y_val) > 0
+            and train_has_both_classes(y_train)
+        )
+
+        if not use_val:
+            # Too little data or single-class train split — fit on all rows
             model.set_params(early_stopping_rounds=None)
             model.fit(X, y, verbose=False)
             return model, {
@@ -49,9 +57,6 @@ class XGBoostClassifierPlugin(BaseAlgorithm):
                 "n_val": 0,
                 "scale_pos_weight": float(scale_pos_weight),
             }
-
-        X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
-        y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
 
         model.fit(
             X_train,
@@ -70,4 +75,16 @@ class XGBoostClassifierPlugin(BaseAlgorithm):
         }
 
     def predict_proba(self, model: Any, X_row: pd.DataFrame) -> np.ndarray:
-        return np.asarray(model.predict_proba(X_row)[0], dtype=float)
+        raw = np.asarray(model.predict_proba(X_row), dtype=float)
+        row = raw[0] if raw.ndim >= 2 else raw
+        out = np.asarray(row, dtype=float).ravel()
+        if out.size == 1:
+            # Single-class booster — map to [P0, P1]
+            classes = getattr(model, "classes_", None)
+            p = float(out[0])
+            if classes is not None and len(classes) == 1 and int(classes[0]) == 0:
+                return np.array([p, 1.0 - p], dtype=float)
+            if classes is not None and len(classes) == 1 and int(classes[0]) == 1:
+                return np.array([1.0 - p, p], dtype=float)
+            return np.array([1.0 - p, p], dtype=float)
+        return out

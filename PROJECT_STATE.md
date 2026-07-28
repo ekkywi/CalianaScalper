@@ -1,10 +1,25 @@
 # CalianaScalper — Project State Handoff
 
-**Last updated:** 2026-07-27  
+**Last updated:** 2026-07-28  
 **Branch:** `main` (local commits ahead of origin until pushed)  
 **Audience:** humans and other AI agents continuing this repo
 
 Use this file as the source of truth for *what already works*. Do not rely on older audit/plan docs that still describe MOCK UI or broken emergency stop.
+
+### Config architecture (4 menus)
+
+| Menu | Scope | Role |
+|------|--------|------|
+| **Trading Profiles** | Per symbol library | Execution SL / TP / horizon — activate one per symbol |
+| **Risk Management** | Global portfolio | Size, daily loss, drawdown, trades, confidence, ML gates — **no live SL/TP** |
+| **ML Training** | Train job | Label params **manual** or **from profile** — creates a **new** model version |
+| **ML Models** | Per symbol library | Activate / delete versions; does not destroy others |
+| **ML Predictions** | Live signals | Latest orchestrator predictions (active model) |
+| **ML Shadow Log** | Debug / shadow | Would-be BUY when shadow mode or gates block |
+
+**Pair rule (paper = live):** active profile and active model must match on SL + TP + horizon. Mismatch or incomplete → **warn + block BUY**. Profile create does **not** auto-bind training; train does not auto-create a profile.
+
+Live position SL/TP always come from the **active trading profile** (never from Risk defaults at trade time).
 
 ---
 
@@ -20,7 +35,7 @@ Use this file as the source of truth for *what already works*. Do not rely on ol
 
 ```text
 Add active symbol → Binance WS 15m (per symbol) → Nest MarketOrchestrator → ML /predict → risk checks
-  → ccxt market order (paper testnet | live mainnet) → positions/trades in Postgres
+  → strategy pair guard (profile ↔ model) → ccxt market order (paper|live) → positions/trades in Postgres
   → Socket.IO + REST → Next.js dashboard
 ```
 
@@ -42,40 +57,38 @@ Earlier: multi-symbol on-demand + Next UI scaffolding (`a3ac093`).
 ### Automated bot
 
 - Candle closed → ML signal (BUY/SELL/HOLD) → confidence gate → trade
-- Position sizing from risk config; max open positions / trades per day / daily loss / drawdown
-- BUY opens LONG in DB after fill; SELL closes LONG (no short in spot mode)
-- **SL/TP:** monitor price → `flattenAndClose` (market sell on exchange, then ledger + trade row)
-- **Emergency stop / resume:** halt flag persisted in `system_config`; flattens open positions with real quantity
-- Pre-trade `canOpenPosition`; if ledger open fails after fill → attempt emergency flatten
-- Symbols CRUD + candle backfill + WS subscribe **on demand** (no BTCUSDT fallback when watchlist empty)
-- Bot stays **idle** until at least one active symbol exists in DB; kline WS does not connect with zero symbols
+- Position sizing from risk config + **active profile SL**; max open positions / trades / daily loss / drawdown
+- BUY opens LONG after fill; SELL closes LONG (no short in spot mode)
+- **SL/TP:** from active trading profile → monitor → `flattenAndClose` (exchange first, then ledger)
+- **Emergency stop / resume:** halt in `system_config`; flattens with real quantity
+- Pre-trade `canOpenPosition`; ledger open failure after fill → emergency flatten attempt
+- Symbols CRUD + candle backfill + WS subscribe on demand
+- Bot idle until ≥1 active symbol; kline WS does not connect with zero symbols
+- **BUY blocked** when strategy pair is incomplete / mismatched (same in paper and live)
+
+### Strategy libraries
+
+- Tables: `trading_profiles`, `ml_model_registry`, `symbol_strategy_bindings` (TypeORM `synchronize: true`)
+- APIs under `/api/strategy/*` (profiles CRUD/activate, models sync/activate/delete, train, label-preview, pairs)
+- ML engine stores versions under `models/versions/{SYMBOL}/{model_id}/` + hot `{SYMBOL}_artifact.pkl`
+- Post-train: Nest polls ML `training_status` then syncs registry + aligns active binding
 
 ### Trading mode (Paper / Live)
 
-- Global banner + switcher in root layout (`TradingModeBanner`)
-- Mode persisted in `system_config` key `trading_mode`
+- Banner + switcher; mode in `system_config` key `trading_mode`
 - `GET/PUT /api/system/trading-mode`, `GET /api/system/balance`, health includes `tradingMode`
 - Socket.IO: `trading-mode-changed`
-- Env:
-  - `BINANCE_TESTNET_API_KEY/SECRET` (fallback: legacy `BINANCE_API_*`)
-  - `BINANCE_MAINNET_API_KEY/SECRET`
-  - `ALLOW_LIVE_TRADING=false` (must be `true` to enable Live)
-  - `TRADING_MODE_DEFAULT=paper`
-- Safety: cannot switch with open positions/orders; paper→live requires confirm body `"LIVE"`
-- Manual Order Entry shows free USDT + estimated cost (`price × qty`); qty is **base asset**
+- Env: testnet keys, mainnet keys, `ALLOW_LIVE_TRADING`, `TRADING_MODE_DEFAULT=paper`
+- Cannot switch with open positions/orders; paper→live requires confirm `"LIVE"`
 
 ### Dashboard (live data — no MOCK_* panels)
 
-- Watchlist + symbol chart (Binance + backend symbols)
-- Risk parameter sliders (`GET/PUT /api/risk/config`)
-- Positions + Real-time PnL (`GET /api/risk/positions`)
-- Position management: close one / close all / update SL-TP
-- Trade history + basic performance stats (`/api/performance/*`) — Sharpe/Sortino/Calmar shown as **n/a**
-- ML model list / retrain / last predictions (`/api/ml/*` Nest proxy → Python)
-- System health (`GET /api/system/health`)
-- Manual orders MARKET/LIMIT (`POST /api/orders`) — BUY opens LONG; SELL closes or reduces LONG
-- Notifications: Zustand alerts only (e.g. emergency stop); no fake alert feed
-- Logs page: honest empty (no structured log store yet)
+- Watchlist + symbol chart
+- **Trading Profiles / Risk / ML Training / ML Models** (four menus)
+- Positions + Real-time PnL; close one / all / update SL-TP
+- Trade history + basic performance (`/api/performance/*`) — Sharpe/Sortino/Calmar **n/a**
+- Predictions, shadow log, system health, manual MARKET/LIMIT orders
+- Notifications: Zustand alerts only; logs page honest empty
 
 ### WebSocket contract
 
@@ -89,13 +102,13 @@ Earlier: multi-symbol on-demand + Next UI scaffolding (`a3ac093`).
 | Item | Status |
 |------|--------|
 | Futures / SHORT | Not supported |
-| Mainnet live trading | **Gated** — needs `ALLOW_LIVE_TRADING=true` + mainnet keys; default remains paper |
+| Mainnet live trading | **Gated** — needs `ALLOW_LIVE_TRADING=true` + mainnet keys |
 | Manual STOP_LOSS order type | Rejected; use position SL/TP |
-| Strategies CRUD | Deferred |
+| Strategies marketplace CRUD | Deferred (profile/model libraries cover execution pairing) |
 | Telegram / Discord / email alerts | Deferred |
 | Structured system log store | Deferred |
-| Real Sharpe / Sortino / Calmar / equity snapshots engine | Deferred (basic PnL from `trades` only) |
-| Config import-export UI APIs | Deferred stubs in client |
+| Real Sharpe / Sortino / Calmar / equity snapshots | Deferred |
+| Config import-export UI | Deferred stubs |
 | Separate DB ledgers per mode | Not done — switch blocked while flat only |
 
 Do **not** re-add fabricated MOCK numbers to look “complete”.
@@ -106,19 +119,16 @@ Do **not** re-add fabricated MOCK numbers to look “complete”.
 
 | Area | Path |
 |------|------|
-| Orchestrator | `apps/backend/src/application/orchestrator/market.orchestrator.ts` |
+| Orchestrator + pair guard | `apps/backend/src/application/orchestrator/market.orchestrator.ts` |
+| Strategy service | `apps/backend/src/infrastructure/strategy/strategy.service.ts` |
+| Strategy API | `apps/backend/src/application/strategy/strategy.controller.ts` |
+| Entities | `trading-profile.entity.ts`, `ml-model-registry.entity.ts`, `symbol-strategy-binding.entity.ts` |
 | Risk / positions | `apps/backend/src/infrastructure/risk/position-manager.service.ts` |
 | Execution | `apps/backend/src/infrastructure/exchange/binance-execution.service.ts` |
-| Market WS (kline) | `apps/backend/src/infrastructure/exchange/binance-ws.service.ts` |
 | Trading mode | `apps/backend/src/application/system/trading-mode.service.ts` |
-| Orders API | `apps/backend/src/application/orders/` |
-| Risk API | `apps/backend/src/application/risk/` |
-| Performance / ML / System APIs | `apps/backend/src/application/{performance,ml,system}/` |
-| UI gateway | `apps/backend/src/presentation/gateway/ui.gateway.ts` |
-| Mode banner | `apps/frontend/src/components/layout/TradingModeBanner.tsx` |
-| Frontend API client | `apps/frontend/src/services/api-extended.ts` |
-| ML engine | `services/ml-engine/main.py` |
-| Entities | `position.entity.ts`, `trade.entity.ts`, `system-config.entity.ts`, `order.entity.ts` |
+| Frontend strategy client | `apps/frontend/src/services/api-strategy.ts` |
+| UI pages | `apps/frontend/src/app/dashboard/{trading-profiles,risk,ml-training,ml-models}/` |
+| ML engine + version store | `services/ml-engine/main.py`, `model_store.py` |
 
 Critical invariant: `BinanceExecutionService.closePosition(symbol, quantity)` requires **quantity > 0**. Never call with `0`.
 
@@ -128,38 +138,37 @@ Critical invariant: `BinanceExecutionService.closePosition(symbol, quantity)` re
 
 Do not start duplicate processes if the user already runs them.
 
-1. PostgreSQL (env in `apps/backend/.env`: `DB_*`, `BINANCE_TESTNET_*` / `BINANCE_API_*`, optional mainnet + `ALLOW_LIVE_TRADING`)
+1. PostgreSQL (env in `apps/backend/.env`)
 2. ML: `cd services/ml-engine && source venv/bin/activate && uvicorn main:app --host 127.0.0.1 --port 8000`
 3. Backend: `cd apps/backend && pnpm run start:dev` → `:3001`
 4. Frontend: `cd apps/frontend && pnpm run dev` → `:3000`
 
-Quick checks:
-
 ```bash
 curl -s http://127.0.0.1:3001/api/system/health
-curl -s http://127.0.0.1:3001/api/system/trading-mode
-curl -s http://127.0.0.1:3001/api/system/balance
+curl -s http://127.0.0.1:3001/api/strategy/pairs
 curl -s http://127.0.0.1:8000/health
+curl -s http://127.0.0.1:8000/library
 ```
 
 ---
 
 ## 7. Conventions for future AI work
 
-1. **User owns long-running service terminals.** Agents should not bind `3000`/`3001`/`8000` unless explicitly asked (avoids EADDRINUSE fights).
-2. Prefer verifying with HTTP against already-running services.
-3. Safety > cosmetics: exchange flatten and risk must stay correct.
-4. Do not commit churny `*.pkl` buffers unless the user asks.
-5. Never enable Live without explicit env kill-switch + mainnet keys.
-6. Phase-4 remaining items: one domain per PR (in-app event alerts, log store, metrics engine, strategies).
+1. **User owns long-running service terminals.** Do not bind `3000`/`3001`/`8000` unless asked.
+2. Prefer HTTP checks against already-running services.
+3. Safety > cosmetics: exchange flatten, pair guard, Live gates.
+4. Do not commit churny `*.pkl` buffers unless asked.
+5. Never enable Live without kill-switch + mainnet keys.
+6. Keep profile ≠ training; match only on activate/pair.
 
 ---
 
-## 8. Definition of done (already met for MVP bot)
+## 8. Definition of done (MVP bot)
 
 - Candle → ML → sandbox order → DB position matches exchange intent  
-- SL/TP and kill switch actually sell on testnet  
-- Dashboard trading pages show live or honest empty state  
-- Paper/Live mode is visible and switchable with safety gates  
+- SL/TP and kill switch sell on testnet  
+- Profile + model libraries with BUY block on mismatch  
+- Dashboard trading pages show live or honest empty  
+- Paper/Live visible and switchable with safety gates  
 
-**Not** required for MVP: Discord alerts, Sharpe ratios, strategy marketplace, unlocked mainnet by default.
+**Not** required: Discord alerts, Sharpe ratios, strategy marketplace, unlocked mainnet by default.

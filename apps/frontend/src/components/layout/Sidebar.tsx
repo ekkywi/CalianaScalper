@@ -9,7 +9,8 @@ import { usePathname } from 'next/navigation';
 import ConnectionStatus from '@/components/layout/ConnectionStatus';
 import {
   Activity, BarChart3, LayoutDashboard,
-  Brain, Bell, Terminal, Send, Shield,
+  Brain, Bell, Terminal, Send, Shield, SlidersHorizontal, GraduationCap,
+  TrendingUp, Eye,
 } from 'lucide-react';
 
 const NAV_SECTIONS = [
@@ -22,16 +23,25 @@ const NAV_SECTIONS = [
   {
     label: 'Trading',
     items: [
+      { href: '/dashboard/trading-profiles', label: 'Trading Profiles', icon: SlidersHorizontal },
       { href: '/dashboard/risk', label: 'Risk Management', icon: Shield },
       { href: '/dashboard/orders', label: 'Orders', icon: Send },
       { href: '/dashboard/positions', label: 'Positions', icon: Activity },
     ],
   },
   {
+    label: 'ML',
+    items: [
+      { href: '/dashboard/ml-training', label: 'ML Training', icon: GraduationCap },
+      { href: '/dashboard/ml-models', label: 'ML Models', icon: Brain },
+      { href: '/dashboard/ml-predictions', label: 'ML Predictions', icon: TrendingUp },
+      { href: '/dashboard/ml-shadow', label: 'ML Shadow Log', icon: Eye },
+    ],
+  },
+  {
     label: 'Analytics',
     items: [
       { href: '/dashboard/performance', label: 'Performance', icon: BarChart3 },
-      { href: '/dashboard/ml-models', label: 'ML Models', icon: Brain },
     ],
   },
   {

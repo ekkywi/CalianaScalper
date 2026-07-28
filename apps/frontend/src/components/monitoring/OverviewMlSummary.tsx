@@ -55,7 +55,7 @@ export default function OverviewMlSummary() {
           </div>
         </div>
         <Link
-          href="/dashboard/ml-models"
+          href="/dashboard/ml-predictions"
           className="inline-flex items-center gap-1 text-[10px] text-sky-400 hover:text-sky-300"
         >
           Details

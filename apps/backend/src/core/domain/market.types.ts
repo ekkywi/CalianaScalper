@@ -58,25 +58,28 @@ export interface AccountBalance {
 }
 
 export interface RiskConfig {
-    maxPositionSizePercent: number;      // Max % of account per position (e.g., 0.02 = 2%)
-    stopLossPercent: number;             // SL as % from entry (e.g., 0.03 = 3%)
-    takeProfitPercent: number;           // TP as % from entry (e.g., 0.06 = 6%)
-    maxDailyLossPercent: number;         // Stop trading if daily loss exceeds this (e.g., 0.05 = 5%)
-    maxDrawdownPercent: number;          // Stop trading if drawdown exceeds this (e.g., 0.15 = 15%)
-    maxOpenPositions: number;            // Max concurrent positions (e.g., 3)
-    maxTradesPerDay: number;             // Max trades per day (e.g., 10)
-    minConfidenceThreshold: number;      // Min ML confidence to trade (e.g., 0.65)
-    slippageProtectionPercent: number;   // Max acceptable slippage (e.g., 0.005 = 0.5%)
-    /** Phase 2: log BUY signals without placing orders */
+    maxPositionSizePercent: number;
+    maxDailyLossPercent: number;
+    maxDrawdownPercent: number;
+    maxOpenPositions: number;
+    maxTradesPerDay: number;
+    minConfidenceThreshold: number;
+    slippageProtectionPercent: number;
     mlShadowMode: boolean;
-    /** Phase 2: block BUY in bad regimes (high vol, downtrend) */
     mlRegimeGateEnabled: boolean;
+    /**
+     * @deprecated Not used for live execution. Kept for DB backward compatibility only.
+     * Live SL/TP live on TradingProfileEntity.
+     */
+    stopLossPercent?: number;
+    /**
+     * @deprecated Not used for live execution. Kept for DB backward compatibility only.
+     */
+    takeProfitPercent?: number;
 }
 
 export const DEFAULT_RISK_CONFIG: RiskConfig = {
     maxPositionSizePercent: 0.02,
-    stopLossPercent: 0.03,
-    takeProfitPercent: 0.06,
     maxDailyLossPercent: 0.05,
     maxDrawdownPercent: 0.15,
     maxOpenPositions: 3,
@@ -85,7 +88,64 @@ export const DEFAULT_RISK_CONFIG: RiskConfig = {
     slippageProtectionPercent: 0.005,
     mlShadowMode: false,
     mlRegimeGateEnabled: true,
+    stopLossPercent: 0.03,
+    takeProfitPercent: 0.06,
 };
+
+/** Defaults when creating a trading profile manually (not from Risk). */
+export const DEFAULT_EXECUTION_PARAMS = {
+    stopLossPercent: 0.03,
+    takeProfitPercent: 0.06,
+    maxHorizonCandles: 96,
+} as const;
+
+/** Snake_case payload for ML engine label_config / drift compare */
+export interface MlLabelConfigPayload {
+    stop_loss_percent: number;
+    take_profit_percent: number;
+    max_horizon_candles: number;
+    label_mode?: string;
+    round_trip_fee_percent?: number;
+}
+
+export type DriftStatus = 'ok' | 'mismatch' | 'unknown' | 'incomplete';
+
+export interface StrategyPairStatus {
+    symbol: string;
+    status: DriftStatus;
+    fields: string[];
+    blockBuy: boolean;
+    profile: {
+        id: string | null;
+        name: string | null;
+        stopLossPercent: number | null;
+        takeProfitPercent: number | null;
+        maxHorizonCandles: number | null;
+    };
+    model: {
+        id: string | null;
+        name: string | null;
+        engineModelId: string | null;
+        labelConfig: MlLabelConfigPayload | null;
+    };
+    message: string;
+}
+
+export function horizonForTakeProfit(takeProfitPercent: number): number {
+    return Math.max(96, Math.ceil(takeProfitPercent * 800));
+}
+
+export function paramsMatch(
+    a: { stopLossPercent: number; takeProfitPercent: number; maxHorizonCandles: number },
+    b: MlLabelConfigPayload,
+    eps = 1e-6,
+): { ok: boolean; fields: string[] } {
+    const fields: string[] = [];
+    if (Math.abs(a.stopLossPercent - b.stop_loss_percent) >= eps) fields.push('stop_loss_percent');
+    if (Math.abs(a.takeProfitPercent - b.take_profit_percent) >= eps) fields.push('take_profit_percent');
+    if (Math.abs(a.maxHorizonCandles - b.max_horizon_candles) >= eps) fields.push('max_horizon_candles');
+    return { ok: fields.length === 0, fields };
+}
 
 /** Paper = Binance spot testnet/sandbox; Live = spot mainnet real capital */
 export type TradingMode = 'paper' | 'live';

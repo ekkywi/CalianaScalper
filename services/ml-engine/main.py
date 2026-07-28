@@ -26,9 +26,14 @@ from algorithms import DEFAULT_ALGORITHM, get_algorithm, list_algorithms
 from algorithms.prob_utils import prob_up_from_proba
 from regime import detect_regime
 from model_store import (
+    activate_model_version,
+    delete_model_version,
     delete_symbol_files,
     discover_symbols,
+    list_all_libraries,
+    list_model_versions,
     load_symbol_into_state,
+    new_model_id,
     purge_symbol_from_state,
     save_artifact,
     save_buffer,
@@ -49,6 +54,7 @@ app_state = {
     "buffers": {},  # symbol -> DataFrame
     "training_status": {},  # idle | training | ready | error
     "last_training_errors": {},  # symbol -> last validation/error message
+    "active_model_ids": {},  # symbol -> engine model_id
     "feature_cols": [
         "feature_rsi_14",
         "feature_rsi_7",
@@ -110,6 +116,8 @@ class PredictionResponse(BaseModel):
 class TrainRequest(BaseModel):
     algorithm: Optional[str] = None
     label_config: Optional[dict] = None
+    name: Optional[str] = None
+    set_active: bool = True
 
 
 class TrainingValidationError(ValueError):
@@ -274,40 +282,67 @@ def run_train_symbol_model(
     symbol: str,
     algorithm_id: Optional[str] = None,
     label_config: Optional[LabelConfig] = None,
+    name: Optional[str] = None,
+    set_active: bool = True,
 ) -> None:
     """Background-safe wrapper so training failures don't bubble into ASGI."""
     try:
-        train_symbol_model(symbol, algorithm_id, label_config)
+        train_symbol_model(
+            symbol,
+            algorithm_id,
+            label_config,
+            name=name,
+            set_active=set_active,
+        )
     except TrainingValidationError as e:
         logger.warning(f"[TRAINING] {symbol}: {e}")
     except Exception:
         logger.exception(f"[TRAINING] Background task gagal untuk {symbol}")
 
 
-def persist_symbol(symbol: str) -> None:
+def persist_symbol(
+    symbol: str,
+    *,
+    model_id: Optional[str] = None,
+    name: Optional[str] = None,
+    set_active: bool = True,
+) -> Optional[str]:
     if symbol not in app_state["models"]:
-        return
+        return None
     algo_id = app_state["algorithms"].get(symbol, DEFAULT_ALGORITHM)
     trained_at = app_state["trained_at"].get(symbol) or int(time.time() * 1000)
-    save_artifact(
+    metrics = app_state["metrics"].get(symbol) or {}
+    mid = save_artifact(
         symbol,
         algorithm=algo_id,
         model=app_state["models"][symbol],
         feature_cols=feature_cols_for(symbol),
         trained_at=trained_at,
+        model_id=model_id or metrics.get("model_id"),
+        name=name or metrics.get("name"),
+        metrics=metrics,
+        set_active=set_active,
     )
+    app_state.setdefault("active_model_ids", {})
+    if set_active:
+        app_state["active_model_ids"][symbol] = mid
+        metrics = {**metrics, "model_id": mid}
+        if name:
+            metrics["name"] = name
+        app_state["metrics"][symbol] = metrics
     if symbol in app_state["buffers"]:
         save_buffer(symbol, app_state["buffers"][symbol])
-    if symbol in app_state["metrics"]:
-        save_metrics(symbol, app_state["metrics"][symbol])
+    return mid
 
 
 def train_symbol_model(
     symbol: str,
     algorithm_id: Optional[str] = None,
     label_config: Optional[LabelConfig] = None,
+    name: Optional[str] = None,
+    set_active: bool = True,
 ):
-    """Train (or retrain) a symbol with the selected algorithm plugin."""
+    """Train a NEW model version (keeps prior versions on disk)."""
     symbol = symbol.upper()
     lc = label_config or DEFAULT_LABEL_CONFIG
     had_existing_model = symbol in app_state["models"]
@@ -318,8 +353,12 @@ def train_symbol_model(
         logger.error(f"[TRAINING] {e}")
         raise
 
+    model_id = new_model_id()
+    display_name = name or f"{symbol}-{algo.id}-{model_id[:6]}"
+
     logger.info(
-        f"[TRAINING] Memulai training {symbol} dengan algoritma {algo.id} "
+        f"[TRAINING] Memulai training {symbol} model_id={model_id} "
+        f"algo={algo.id} name={display_name} "
         f"(label SL={lc.stop_loss_percent:.2%} TP={lc.take_profit_percent:.2%} "
         f"horizon={lc.max_horizon_candles} candles)..."
     )
@@ -361,27 +400,52 @@ def train_symbol_model(
             "algorithm_name": algo.display_name,
             "trained_at": trained_at,
             "label_config": lc.to_dict(),
+            "model_id": model_id,
+            "name": display_name,
             **label_summary(train_data),
         }
 
-        app_state["models"][symbol] = model
-        app_state["algorithms"][symbol] = algo.id
-        app_state["metrics"][symbol] = metrics
-        app_state["trained_at"][symbol] = trained_at
-        app_state["feature_cols_by_symbol"][symbol] = list(cols)
+        promote = set_active or not had_existing_model
+        if promote:
+            app_state["models"][symbol] = model
+            app_state["algorithms"][symbol] = algo.id
+            app_state["metrics"][symbol] = metrics
+            app_state["trained_at"][symbol] = trained_at
+            app_state["feature_cols_by_symbol"][symbol] = list(cols)
+
         app_state["training_status"][symbol] = "ready"
         app_state["last_training_errors"].pop(symbol, None)
 
-        persist_symbol(symbol)
+        if promote:
+            persist_symbol(
+                symbol,
+                model_id=model_id,
+                name=display_name,
+                set_active=True,
+            )
+        else:
+            save_artifact(
+                symbol,
+                algorithm=algo.id,
+                model=model,
+                feature_cols=list(cols),
+                trained_at=trained_at,
+                model_id=model_id,
+                name=display_name,
+                metrics=metrics,
+                set_active=False,
+            )
+            save_buffer(symbol, app_state["buffers"][symbol])
 
         acc = metrics.get("accuracy")
         prec = metrics.get("precision_buy")
         acc_str = f"{acc:.4f}" if isinstance(acc, (int, float)) else "n/a"
         prec_str = f"{prec:.4f}" if isinstance(prec, (int, float)) else "n/a"
         logger.info(
-            f"[TRAINING] Selesai {symbol} ({algo.id}). "
-            f"Val accuracy: {acc_str} | precision_buy: {prec_str}"
+            f"[TRAINING] Selesai {symbol} model_id={model_id} ({algo.id}). "
+            f"Val accuracy: {acc_str} | precision_buy: {prec_str} | active={promote}"
         )
+        return model_id
 
     except Exception as e:
         if not had_existing_model:
@@ -454,15 +518,59 @@ async def force_train(
         )
 
     lc = LabelConfig.from_dict(body.label_config)
-    background_tasks.add_task(run_train_symbol_model, symbol, algorithm_id, lc)
+    background_tasks.add_task(
+        run_train_symbol_model,
+        symbol,
+        algorithm_id,
+        lc,
+        body.name,
+        body.set_active,
+    )
 
     return {
         "status": "training_started",
         "message": f"Training model {symbol} ({algorithm_id}) dimulai di background.",
         "symbol": symbol,
         "algorithm": algorithm_id,
+        "name": body.name,
+        "set_active": body.set_active,
         "label_config": lc.to_dict(),
     }
+
+
+@app.get("/library")
+async def model_library():
+    """List all versioned models per symbol."""
+    return {"libraries": list_all_libraries()}
+
+
+@app.get("/library/{symbol}")
+async def model_library_symbol(symbol: str):
+    return list_model_versions(symbol.upper())
+
+
+@app.post("/library/{symbol}/activate/{model_id}")
+async def activate_library_model(symbol: str, model_id: str):
+    symbol = symbol.upper()
+    try:
+        result = activate_model_version(symbol, model_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    # Reload into memory
+    load_symbol_into_state(symbol, app_state)
+    return {"status": "ok", **result}
+
+
+@app.delete("/library/{symbol}/{model_id}")
+async def delete_library_model(symbol: str, model_id: str):
+    symbol = symbol.upper()
+    try:
+        result = delete_model_version(symbol, model_id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"status": "ok", **result}
 
 
 @app.get("/label-preview/{symbol}")

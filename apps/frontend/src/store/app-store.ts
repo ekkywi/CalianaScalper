@@ -10,8 +10,8 @@ import { persist } from 'zustand/middleware';
 
 export interface RiskConfig {
   maxPositionSizePercent: number;
-  stopLossPercent: number;
-  takeProfitPercent: number;
+  stopLossPercent?: number;
+  takeProfitPercent?: number;
   maxDailyLossPercent: number;
   maxDrawdownPercent: number;
   maxOpenPositions: number;
