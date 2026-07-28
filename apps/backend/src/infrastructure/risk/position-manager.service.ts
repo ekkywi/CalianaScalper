@@ -12,6 +12,7 @@ import {
     MARKET_EVENTS,
     AccountBalance,
     CandleData,
+    MlTradeContext,
 } from '../../core/domain/market.types';
 import { OrderEntity } from '../database/order.entity';
 import { PositionEntity } from '../database/position.entity';
@@ -315,6 +316,9 @@ export class PositionManagerService implements OnModuleInit {
             closeTime: position.closeTime,
             unrealizedPnL: position.unrealizedPnL,
             realizedPnL: position.realizedPnL,
+            mlSignal: position.mlSignal ?? null,
+            mlConfidence: position.mlConfidence ?? null,
+            mlAlgorithm: position.mlAlgorithm ?? null,
         };
     }
 
@@ -335,6 +339,10 @@ export class PositionManagerService implements OnModuleInit {
             closeTime: entity.closeTime,
             unrealizedPnL: entity.unrealizedPnL,
             realizedPnL: entity.realizedPnL,
+            mlSignal: entity.mlSignal ?? undefined,
+            mlConfidence:
+                entity.mlConfidence != null ? Number(entity.mlConfidence) : undefined,
+            mlAlgorithm: entity.mlAlgorithm ?? undefined,
         };
     }
 
@@ -428,6 +436,7 @@ export class PositionManagerService implements OnModuleInit {
         entryPrice: number,
         quantity: number,
         balance: AccountBalance,
+        mlContext?: MlTradeContext,
     ): Promise<Position | null> {
         this.resetDailyStatsIfNeeded();
 
@@ -496,6 +505,13 @@ export class PositionManagerService implements OnModuleInit {
             status: 'OPEN',
             unrealizedPnL: 0,
             realizedPnL: 0,
+            ...(mlContext
+                ? {
+                      mlSignal: mlContext.signal,
+                      mlConfidence: mlContext.confidence,
+                      mlAlgorithm: mlContext.algorithm,
+                  }
+                : {}),
         };
 
         // Save to database
@@ -580,7 +596,10 @@ export class PositionManagerService implements OnModuleInit {
                 entryTime: position.entryTime,
                 closeTime: position.closeTime,
                 duration: position.closeTime - position.entryTime,
-                positionId: symbol, // simplified reference
+                positionId: symbol,
+                mlSignal: position.mlSignal ?? null,
+                mlConfidence: position.mlConfidence ?? null,
+                mlAlgorithm: position.mlAlgorithm ?? null,
             });
         } catch (err) {
             this.logger.error(`[DB] Gagal menyimpan penutupan posisi: ${err.message}`);
@@ -883,6 +902,86 @@ export class PositionManagerService implements OnModuleInit {
             this.logger.error(`[DB] Gagal menghitung total PnL: ${err.message}`);
             return 0;
         }
+    }
+
+    /**
+     * Performance stats for trades opened via ML BUY (paper or live).
+     */
+    async getMlTradeStats(period: '1d' | '1w' | '1m' | 'all' = 'all') {
+        const now = Date.now();
+        const periodMs: Record<string, number> = {
+            '1d': 86400000,
+            '1w': 7 * 86400000,
+            '1m': 30 * 86400000,
+            all: 0,
+        };
+        const cutoff = period === 'all' ? 0 : now - periodMs[period];
+
+        let trades: TradeEntity[];
+        try {
+            const qb = this.tradeRepo
+                .createQueryBuilder('trade')
+                .where('trade.mlSignal IS NOT NULL')
+                .orderBy('trade.closeTime', 'DESC');
+            if (cutoff > 0) {
+                qb.andWhere('trade.closeTime > :cutoff', { cutoff });
+            }
+            trades = await qb.getMany();
+        } catch (err) {
+            this.logger.error(`[DB] getMlTradeStats failed: ${err.message}`);
+            trades = [];
+        }
+
+        let totalPnl = 0;
+        let winningTrades = 0;
+        let losingTrades = 0;
+        let confidenceSum = 0;
+        let confidenceCount = 0;
+        const bySymbol: Record<
+            string,
+            { trades: number; pnl: number; wins: number }
+        > = {};
+
+        for (const t of trades) {
+            const pnl = Number(t.pnl) || 0;
+            totalPnl += pnl;
+            if (pnl > 0) winningTrades += 1;
+            else if (pnl < 0) losingTrades += 1;
+
+            const conf = t.mlConfidence != null ? Number(t.mlConfidence) : null;
+            if (conf != null && Number.isFinite(conf)) {
+                confidenceSum += conf;
+                confidenceCount += 1;
+            }
+
+            const sym = t.symbol;
+            if (!bySymbol[sym]) {
+                bySymbol[sym] = { trades: 0, pnl: 0, wins: 0 };
+            }
+            bySymbol[sym].trades += 1;
+            bySymbol[sym].pnl += pnl;
+            if (pnl > 0) bySymbol[sym].wins += 1;
+        }
+
+        const totalTrades = trades.length;
+        return {
+            period,
+            totalTrades,
+            winningTrades,
+            losingTrades,
+            winRate:
+                totalTrades > 0
+                    ? Math.round((winningTrades / totalTrades) * 1000) / 1000
+                    : null,
+            totalPnl: Math.round(totalPnl * 100) / 100,
+            avgConfidence:
+                confidenceCount > 0
+                    ? Math.round((confidenceSum / confidenceCount) * 1000) / 1000
+                    : null,
+            bySymbol,
+            disclaimer:
+                'Trades opened by bot ML BUY only (mlSignal set). Manual orders excluded.',
+        };
     }
 
     /**

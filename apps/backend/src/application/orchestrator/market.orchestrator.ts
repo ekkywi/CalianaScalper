@@ -4,6 +4,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { MARKET_EVENTS, type CandleData } from '../../core/domain/market.types';
 import { MlEngineService } from '../../infrastructure/ml/ml-engine.service';
+import type { MlPrediction } from '../../infrastructure/ml/ml-engine.service';
+import { MlShadowService } from '../../infrastructure/ml/ml-shadow.service';
 import { BinanceExecutionService } from '../../infrastructure/exchange/binance-execution.service';
 import { PositionManagerService } from '../../infrastructure/risk/position-manager.service';
 import { SymbolService } from '../symbol/symbol.service';
@@ -18,6 +20,7 @@ export class MarketOrchestrator {
 
     constructor(
         private readonly mlEngine: MlEngineService,
+        private readonly mlShadow: MlShadowService,
         private readonly executionService: BinanceExecutionService,
         private readonly positionManager: PositionManagerService,
         private readonly symbolService: SymbolService,
@@ -72,19 +75,26 @@ export class MarketOrchestrator {
                 return;
             }
 
-            // STEP 6: Validate prediction confidence against risk threshold
+            // STEP 6: Confidence + regime gates (Phase 2)
             const riskConfig = this.positionManager.getRiskConfig();
-            if (prediction.confidence < riskConfig.minConfidenceThreshold) {
-                this.logger.log(
-                    `[ORCHESTRATOR] Keyakinan ${(prediction.confidence * 100).toFixed(1)}% ` +
-                    `di bawah threshold ${(riskConfig.minConfidenceThreshold * 100).toFixed(1)}%. HOLD.`
-                );
+            const gate = this.evaluateMlGates(candle, prediction, riskConfig);
+            if (!gate.allowExecute) {
+                if (gate.recordShadow) {
+                    this.mlShadow.record(candle, prediction, {
+                        effectiveMinConfidence: gate.effectiveMinConfidence,
+                        blockedBy: gate.blockedBy,
+                        wouldExecute: gate.wouldExecute,
+                    });
+                }
+                if (gate.logMessage) {
+                    this.logger.log(gate.logMessage);
+                }
                 return;
             }
 
             // STEP 7: Execute trade based on signal
             if (prediction.signal === 'BUY') {
-                await this.executeBuySignal(candle, prediction.confidence);
+                await this.executeBuySignal(candle, prediction);
             } else if (prediction.signal === 'SELL') {
                 await this.executeSellSignal(candle, prediction.confidence);
             } else {
@@ -123,8 +133,103 @@ export class MarketOrchestrator {
         return prediction;
     }
 
-    private async executeBuySignal(candle: CandleData, confidence: number) {
+    private evaluateMlGates(
+        candle: CandleData,
+        prediction: MlPrediction,
+        riskConfig: ReturnType<PositionManagerService['getRiskConfig']>,
+    ): {
+        allowExecute: boolean;
+        recordShadow: boolean;
+        wouldExecute: boolean;
+        effectiveMinConfidence: number;
+        blockedBy: 'shadow_mode' | 'regime' | 'confidence' | null;
+        logMessage: string | null;
+    } {
+        const raw = prediction.raw || {};
+        const regimeBump = riskConfig.mlRegimeGateEnabled
+            ? Number(raw.regime_confidence_bump) || 0
+            : 0;
+        const effectiveMin = riskConfig.minConfidenceThreshold + regimeBump;
+
+        const base = {
+            effectiveMinConfidence: effectiveMin,
+            recordShadow: false,
+            wouldExecute: false,
+            blockedBy: null as 'shadow_mode' | 'regime' | 'confidence' | null,
+            logMessage: null as string | null,
+            allowExecute: true,
+        };
+
+        if (prediction.signal !== 'BUY') {
+            if (prediction.confidence < effectiveMin) {
+                return {
+                    ...base,
+                    allowExecute: false,
+                    logMessage:
+                        `[ORCHESTRATOR] ${prediction.signal} ${candle.symbol} skipped — confidence ` +
+                        `${(prediction.confidence * 100).toFixed(1)}% below ` +
+                        `${(effectiveMin * 100).toFixed(1)}%`,
+                };
+            }
+            return base;
+        }
+
+        // BUY path
+        const wouldPassConfidence = prediction.confidence >= effectiveMin;
+        const allowLong =
+            !riskConfig.mlRegimeGateEnabled || raw.regime_allow_long !== false;
+        const wouldPassRegime = allowLong;
+        const wouldExecute = wouldPassConfidence && wouldPassRegime;
+
+        if (!wouldPassConfidence) {
+            return {
+                ...base,
+                allowExecute: false,
+                blockedBy: 'confidence',
+                logMessage:
+                    `[ORCHESTRATOR] BUY ${candle.symbol} blocked — confidence ` +
+                    `${(prediction.confidence * 100).toFixed(1)}% < ` +
+                    `${(effectiveMin * 100).toFixed(1)}%` +
+                    (regimeBump > 0 ? ` (incl. regime +${(regimeBump * 100).toFixed(0)}%)` : ''),
+            };
+        }
+
+        if (!wouldPassRegime) {
+            const regime = raw.regime || 'unknown';
+            const reason = raw.regime_reason || 'regime gate';
+            return {
+                ...base,
+                allowExecute: false,
+                blockedBy: 'regime',
+                wouldExecute: false,
+                logMessage:
+                    `[REGIME] BUY ${candle.symbol} blocked (${regime}): ${reason}`,
+            };
+        }
+
+        if (riskConfig.mlShadowMode) {
+            return {
+                ...base,
+                allowExecute: false,
+                recordShadow: true,
+                wouldExecute: true,
+                blockedBy: 'shadow_mode',
+                logMessage:
+                    `[SHADOW] Would BUY ${candle.symbol} @ ${(prediction.confidence * 100).toFixed(1)}% ` +
+                    `(regime=${raw.regime || 'n/a'}) — execution skipped`,
+            };
+        }
+
+        return { ...base, wouldExecute: true };
+    }
+
+    private async executeBuySignal(candle: CandleData, prediction: MlPrediction) {
         const symbol = candle.symbol;
+        const confidence = prediction.confidence;
+        const algorithm =
+            typeof prediction.raw?.algorithm === 'string'
+                ? prediction.raw.algorithm
+                : undefined;
         this.logger.log(`[SINYAL] BUY ${symbol} dengan keyakinan ${(confidence * 100).toFixed(1)}%`);
 
         const balance = await this.executionService.getBalance('USDT');
@@ -183,6 +288,11 @@ export class MarketOrchestrator {
             avgPrice,
             filledQty,
             balance,
+            {
+                signal: prediction.signal,
+                confidence,
+                algorithm,
+            },
         );
 
         if (!position) {

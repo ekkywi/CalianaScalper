@@ -25,6 +25,16 @@ export interface Position {
     closeTime?: number;
     unrealizedPnL: number;
     realizedPnL: number;
+    /** Set when position opened from ML orchestrator BUY */
+    mlSignal?: string;
+    mlConfidence?: number;
+    mlAlgorithm?: string;
+}
+
+export interface MlTradeContext {
+    signal: string;
+    confidence: number;
+    algorithm?: string;
 }
 
 export interface OrderResult {
@@ -57,6 +67,10 @@ export interface RiskConfig {
     maxTradesPerDay: number;             // Max trades per day (e.g., 10)
     minConfidenceThreshold: number;      // Min ML confidence to trade (e.g., 0.65)
     slippageProtectionPercent: number;   // Max acceptable slippage (e.g., 0.005 = 0.5%)
+    /** Phase 2: log BUY signals without placing orders */
+    mlShadowMode: boolean;
+    /** Phase 2: block BUY in bad regimes (high vol, downtrend) */
+    mlRegimeGateEnabled: boolean;
 }
 
 export const DEFAULT_RISK_CONFIG: RiskConfig = {
@@ -69,6 +83,8 @@ export const DEFAULT_RISK_CONFIG: RiskConfig = {
     maxTradesPerDay: 10,
     minConfidenceThreshold: 0.65,
     slippageProtectionPercent: 0.005,
+    mlShadowMode: false,
+    mlRegimeGateEnabled: true,
 };
 
 /** Paper = Binance spot testnet/sandbox; Live = spot mainnet real capital */

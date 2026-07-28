@@ -46,4 +46,14 @@ export class TradeEntity {
 
     @Column({ type: 'varchar', length: 50, nullable: true })
     positionId: string; // reference to original position
+
+    /** ML context at entry (null for manual orders) */
+    @Column({ type: 'varchar', length: 10, nullable: true })
+    mlSignal: string | null;
+
+    @Column({ type: 'decimal', precision: 8, scale: 4, nullable: true })
+    mlConfidence: number | null;
+
+    @Column({ type: 'varchar', length: 32, nullable: true })
+    mlAlgorithm: string | null;
 }

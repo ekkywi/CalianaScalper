@@ -44,4 +44,13 @@ export class PositionEntity {
 
     @Column({ type: 'decimal', precision: 18, scale: 8, default: 0 })
     realizedPnL: number;
+
+    @Column({ type: 'varchar', length: 10, nullable: true })
+    mlSignal: string | null;
+
+    @Column({ type: 'decimal', precision: 8, scale: 4, nullable: true })
+    mlConfidence: number | null;
+
+    @Column({ type: 'varchar', length: 32, nullable: true })
+    mlAlgorithm: string | null;
 }

@@ -175,16 +175,52 @@ export async function fetchMlModels() {
   return getJson('/ml/models');
 }
 
-export async function retrainModel(symbol: string) {
-  return sendJson(`/ml/train/${encodeURIComponent(symbol)}`, 'POST');
+export async function retrainModel(symbol: string, algorithm?: string) {
+  return sendJson(`/ml/train/${encodeURIComponent(symbol)}`, 'POST', {
+    ...(algorithm ? { algorithm } : {}),
+  });
+}
+
+export async function deleteMlModel(symbol: string) {
+  return sendJson(`/ml/model/${encodeURIComponent(symbol)}`, 'DELETE');
 }
 
 export async function fetchModelInfo(symbol: string) {
   return getJson(`/ml/model/${encodeURIComponent(symbol)}`);
 }
 
+export async function fetchMlLabelPreview(symbol: string) {
+  return getJson(`/ml/label-preview/${encodeURIComponent(symbol)}`);
+}
+
+export async function fetchMlEval(symbol: string) {
+  return getJson(`/ml/eval/${encodeURIComponent(symbol)}`);
+}
+
+export type MlTradeStats = {
+  period: string;
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+  winRate: number | null;
+  totalPnl: number;
+  avgConfidence: number | null;
+  bySymbol: Record<string, { trades: number; pnl: number; wins: number }>;
+  disclaimer: string;
+};
+
+export async function fetchMlTradeStats(
+  period: '1d' | '1w' | '1m' | 'all' = 'all',
+): Promise<MlTradeStats> {
+  return getJson(`/ml/trade-stats?period=${period}`);
+}
+
 export async function fetchMlPredictions() {
   return getJson('/ml/predictions');
+}
+
+export async function fetchMlShadowPredictions(limit = 50) {
+  return getJson(`/ml/shadow-predictions?limit=${limit}`);
 }
 
 export async function fetchMlHealth() {

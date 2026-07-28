@@ -2,6 +2,7 @@
 
 import MlModelManagement from '@/components/strategy/MlModelManagement';
 import MlPredictionDisplay from '@/components/monitoring/MlPredictionDisplay';
+import MlShadowLogPanel from '@/components/monitoring/MlShadowLogPanel';
 
 export default function MlModelsPage() {
   return (
@@ -12,7 +13,10 @@ export default function MlModelsPage() {
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <MlModelManagement />
-        <MlPredictionDisplay />
+        <div className="space-y-6">
+          <MlPredictionDisplay />
+          <MlShadowLogPanel />
+        </div>
       </div>
     </div>
   );

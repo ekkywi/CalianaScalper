@@ -127,14 +127,8 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     
 def add_target_variable(df: pd.DataFrame, forward_periods: int = 1, min_return: float = 0.005) -> pd.DataFrame:
     """
-    Membuat label/target klasifikasi untuk proses training.
-    Menggunakan forward return dengan threshold untuk mengurangi noise.
-    Mencegah Data Leakage dengan menggeser (shift) close masa depan.
-    
-    Args:
-        df: DataFrame dengan data OHLCV
-        forward_periods: Jumlah candle ke depan untuk menghitung return
-        min_return: Minimum return untuk dianggap sinyal (default 0.5%)
+    Legacy forward-return label (superseded by labeling.add_trade_outcome_label).
+    Kept for reference; training uses tp_before_sl labels aligned with bot SL/TP.
     """
 
     data = df.copy()

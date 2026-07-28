@@ -1,17 +1,19 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import { fetchSymbols, deleteSymbol } from '@/services/api';
+import { deleteMlModel } from '@/services/api-extended';
 import { fetchMultiple24hrTickers } from '@/services/binance-rest';
 import { binanceTickerWS, TickerData } from '@/services/binance-ws';
 import { socket } from '@/services/socket';
 import AddSymbolModal from '@/components/watchlist/AddSymbolModal';
 import PriceFlash from '@/components/ui/PriceFlash';
-import PerformanceDashboard from '@/components/monitoring/PerformanceDashboard';
 import RealTimePnL from '@/components/monitoring/RealTimePnL';
-import MlPredictionDisplay from '@/components/monitoring/MlPredictionDisplay';
-import SystemHealthMonitor from '@/components/monitoring/SystemHealthMonitor';
-import EmergencyCircuitBreaker from '@/components/emergency/EmergencyCircuitBreaker';
 import CriticalStatusStrip from '@/components/layout/CriticalStatusStrip';
+import WatchlistSummary from '@/components/watchlist/WatchlistSummary';
+import DailyRiskPulse from '@/components/monitoring/DailyRiskPulse';
+import OverviewPerformanceSummary from '@/components/monitoring/OverviewPerformanceSummary';
+import OverviewMlSummary from '@/components/monitoring/OverviewMlSummary';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Link from 'next/link';
 import {
   Trash2, TrendingUp, TrendingDown, Minus, ExternalLink, Shield,
@@ -72,6 +74,10 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'watchlist' | 'overview'>('overview');
+  const [deleteTarget, setDeleteTarget] = useState<SymbolItem | null>(null);
+  const [alsoDeleteMl, setAlsoDeleteMl] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -144,10 +150,36 @@ export default function DashboardPage() {
     return () => { socket.off('realtime-price', onPrice); };
   }, []);
 
-  const handleDelete = async (id: string) => {
-    if (confirm('Hapus koin ini dari pantauan?')) {
-      await deleteSymbol(id);
-      loadData();
+  const openDeleteDialog = (item: SymbolItem) => {
+    setDeleteTarget(item);
+    setAlsoDeleteMl(false);
+    setDeleteError(null);
+  };
+
+  const confirmWatchlistDelete = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await deleteSymbol(target.id);
+      setDeleteTarget(null);
+      setAlsoDeleteMl(false);
+      if (alsoDeleteMl) {
+        try {
+          await deleteMlModel(target.symbol);
+        } catch (err: any) {
+          setDeleteError(
+            err?.message ||
+              `Watchlist removed, but ML model delete failed for ${target.symbol}`,
+          );
+        }
+      }
+      await loadData();
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Failed to remove symbol from watchlist');
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
@@ -197,18 +229,22 @@ export default function DashboardPage() {
           <>
             <CriticalStatusStrip />
 
-            {/* Critical: PnL + Emergency above the fold */}
+            {/* Critical: PnL + Watchlist summary above the fold */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <RealTimePnL />
-              <EmergencyCircuitBreaker />
+              <WatchlistSummary
+                symbols={symbols}
+                tickers={tickers}
+                loading={loading}
+                onViewAll={() => setActiveTab('watchlist')}
+              />
             </div>
 
-            <SystemHealthMonitor />
+            <DailyRiskPulse />
 
-            {/* Secondary analytics below the fold */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <PerformanceDashboard />
-              <MlPredictionDisplay />
+              <OverviewPerformanceSummary />
+              <OverviewMlSummary />
             </div>
 
             {/* Compact secondary links — not above the fold */}
@@ -330,7 +366,7 @@ export default function DashboardPage() {
                             <Link href={`/dashboard/${item.symbol}`} className="p-1.5 rounded text-slate-600 hover:text-sky-400 hover:bg-sky-500/10 transition-colors" title="Buka Grafik">
                               <ExternalLink className="w-3.5 h-3.5" />
                             </Link>
-                            <button onClick={() => handleDelete(item.id)} className="p-1.5 rounded text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="Hapus">
+                            <button onClick={() => openDeleteDialog(item)} className="p-1.5 rounded text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="Hapus">
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
@@ -344,6 +380,40 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title={`Remove ${deleteTarget?.symbol || ''} from watchlist?`}
+        description="Stops monitoring this symbol on the dashboard. ML model files are kept unless you opt in below."
+        confirmLabel="Remove"
+        variant="danger"
+        loading={deleteBusy}
+        onConfirm={confirmWatchlistDelete}
+        onCancel={() => {
+          if (!deleteBusy) {
+            setDeleteTarget(null);
+            setAlsoDeleteMl(false);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <label className="flex items-start gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={alsoDeleteMl}
+            onChange={(e) => setAlsoDeleteMl(e.target.checked)}
+            disabled={deleteBusy}
+            className="mt-0.5 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500/40"
+          />
+          <span className="text-xs text-slate-300 leading-relaxed">
+            Also delete ML model files for{' '}
+            <span className="font-mono text-slate-200">{deleteTarget?.symbol}</span>
+          </span>
+        </label>
+        {deleteError && (
+          <p className="text-xs text-red-400 mt-2">{deleteError}</p>
+        )}
+      </ConfirmDialog>
     </div>
   );
 }

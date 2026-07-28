@@ -225,6 +225,38 @@ export default function RiskParametersDashboard() {
         />
       </div>
 
+      <div className="mt-4 pt-4 border-t border-slate-800 space-y-3">
+        <p className="text-[10px] uppercase tracking-wider text-slate-500 font-medium">
+          ML strategy (Phase 2)
+        </p>
+        <label className="flex items-start gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={Boolean(localConfig.mlRegimeGateEnabled)}
+            onChange={(e) =>
+              setLocalConfig((p) => ({ ...p, mlRegimeGateEnabled: e.target.checked }))
+            }
+            className="mt-0.5 rounded border-slate-600 bg-slate-800 text-sky-500"
+          />
+          <span className="text-xs text-slate-300 leading-relaxed">
+            Regime gate — block or tighten BUY in high volatility / downtrend
+          </span>
+        </label>
+        <label className="flex items-start gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={Boolean(localConfig.mlShadowMode)}
+            onChange={(e) =>
+              setLocalConfig((p) => ({ ...p, mlShadowMode: e.target.checked }))
+            }
+            className="mt-0.5 rounded border-slate-600 bg-slate-800 text-amber-500"
+          />
+          <span className="text-xs text-slate-300 leading-relaxed">
+            Shadow mode — log would-be BUY orders without executing (paper-safe testing)
+          </span>
+        </label>
+      </div>
+
       <div className="mt-4 flex items-start gap-2 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">
         <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
         <p className="text-[11px] text-amber-400/80">

@@ -18,6 +18,8 @@ export interface RiskConfig {
   maxTradesPerDay: number;
   minConfidenceThreshold: number;
   slippageProtectionPercent: number;
+  mlShadowMode: boolean;
+  mlRegimeGateEnabled: boolean;
 }
 
 export interface Position {
@@ -165,6 +167,8 @@ const DEFAULT_RISK_CONFIG: RiskConfig = {
   maxTradesPerDay: 10,
   minConfidenceThreshold: 0.65,
   slippageProtectionPercent: 0.005,
+  mlShadowMode: false,
+  mlRegimeGateEnabled: true,
 };
 
 // ============================================================

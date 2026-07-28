@@ -190,7 +190,7 @@ export class BinanceWsService implements OnModuleInit, OnModuleDestroy {
             `[WS] Menyiapkan infrastruktur untuk simbol baru: ${symbol.symbol}`,
         );
 
-        await this.binanceRestService.backfillCandles(symbol.symbol, this.TIMEFRAME, 1000);
+        await this.binanceRestService.backfillCandles(symbol.symbol, this.TIMEFRAME, 2000);
 
         if (this.isIdle || !this.isSocketOpen()) {
             await this.connect();

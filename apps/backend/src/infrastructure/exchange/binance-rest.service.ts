@@ -16,27 +16,56 @@ export class BinanceRestService {
         private readonly candleRepo: Repository<CandleEntity>,
     ) {}
 
+    private mapKlineRows(symbol: string, rawData: any[]): CandleEntity[] {
+        return rawData.map((k: any[]) =>
+            this.candleRepo.create({
+                symbol: symbol.toUpperCase(),
+                startTime: k[0],
+                closeTime: k[6],
+                open: parseFloat(k[1]),
+                high: parseFloat(k[2]),
+                low: parseFloat(k[3]),
+                close: parseFloat(k[4]),
+                volume: parseFloat(k[5]),
+            }),
+        );
+    }
+
     async backfillCandles(symbol: string, interval: string = '15m', limit: number = 500) {
-        this.logger.log(`Memulai backfill ${limit} candle historis untuk ${symbol}...`);
+        const sym = symbol.toUpperCase();
+        const cappedLimit = Math.min(Math.max(limit, 1), 2000);
+        this.logger.log(
+            `Memulai backfill ${cappedLimit} candle historis untuk ${sym}...`,
+        );
 
         try {
-            const response = await axios.get(this.REST_URL, {
-                params: { symbol: symbol.toUpperCase(), interval, limit},
+            const firstBatch = Math.min(1000, cappedLimit);
+            const response1 = await axios.get(this.REST_URL, {
+                params: { symbol: sym, interval, limit: firstBatch },
             });
+            let rawData: any[] = response1.data ?? [];
 
-            const rawData = response.data;
-            const candlesToSave = rawData.map((k: any[]) => {
-                return this.candleRepo.create({
-                    symbol: symbol.toUpperCase(),
-                    startTime: k[0],
-                    closeTime: k[6],
-                    open: parseFloat(k[1]),
-                    high: parseFloat(k[2]),
-                    low: parseFloat(k[3]),
-                    close: parseFloat(k[4]),
-                    volume: parseFloat(k[5]),
+            if (cappedLimit > 1000 && rawData.length > 0) {
+                const oldestOpen = rawData[0][0];
+                const secondLimit = cappedLimit - 1000;
+                const response2 = await axios.get(this.REST_URL, {
+                    params: {
+                        symbol: sym,
+                        interval,
+                        limit: secondLimit,
+                        endTime: Number(oldestOpen) - 1,
+                    },
                 });
-            });
+                const older = response2.data ?? [];
+                rawData = [...older, ...rawData];
+            }
+
+            const candlesToSave = this.mapKlineRows(sym, rawData);
+
+            if (candlesToSave.length === 0) {
+                this.logger.warn(`Backfill ${sym}: tidak ada candle dari Binance.`);
+                return;
+            }
 
             await this.candleRepo
                 .createQueryBuilder()
@@ -45,8 +74,10 @@ export class BinanceRestService {
                 .values(candlesToSave)
                 .orIgnore()
                 .execute();
-            
-            this.logger.log(`Backfill selesai. ${candlesToSave.length} candle tersimpan di database.`);
+
+            this.logger.log(
+                `Backfill selesai. ${candlesToSave.length} candle tersimpan di database.`,
+            );
         } catch (error) {
             this.logger.error(`Gagal menarik data historis: ${error.message}`);
         }

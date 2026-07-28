@@ -12,6 +12,12 @@ type Prediction = {
   signal: 'BUY' | 'SELL' | 'HOLD';
   confidence: number;
   timestamp: number;
+  raw?: {
+    regime?: string;
+    regime_reason?: string;
+    regime_confidence_bump?: number;
+    algorithm?: string;
+  };
 };
 
 export default function MlPredictionDisplay() {
@@ -124,6 +130,15 @@ export default function MlPredictionDisplay() {
                   <p className="text-slate-300 font-mono mt-1">{ageMin}m ago</p>
                 </div>
               </div>
+              {pred.raw?.regime && (
+                <p className="text-[10px] text-slate-500 mt-2 font-mono">
+                  regime: {pred.raw.regime}
+                  {pred.raw.regime_confidence_bump
+                    ? ` (+${(Number(pred.raw.regime_confidence_bump) * 100).toFixed(0)}% min conf)`
+                    : ''}
+                  {pred.raw.regime_reason ? ` — ${pred.raw.regime_reason}` : ''}
+                </p>
+              )}
             </div>
           );
         })}
