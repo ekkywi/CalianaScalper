@@ -59,8 +59,24 @@ export async function emergencyStopAll() {
   return sendJson('/risk/emergency-stop', 'POST');
 }
 
-export async function resumeTrading() {
-  return sendJson('/risk/resume', 'POST');
+export async function resumeTrading(force = false) {
+  return sendJson('/risk/resume', 'POST', { force });
+}
+
+export async function fetchDrawdownStatus() {
+  return getJson('/risk/drawdown/status');
+}
+
+export async function fetchDrawdownHistory() {
+  return getJson('/risk/drawdown/history');
+}
+
+export async function fetchPerSymbolDrawdown() {
+  return getJson('/risk/drawdown/per-symbol');
+}
+
+export async function resetPeakBalance(newPeak?: number) {
+  return sendJson('/risk/drawdown/reset-peak', 'POST', newPeak != null ? { newPeak } : {});
 }
 
 export async function closePosition(symbol: string) {

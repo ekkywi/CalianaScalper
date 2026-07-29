@@ -8,18 +8,27 @@ import { persist } from 'zustand/middleware';
 // Types
 // ============================================================
 
+export interface DrawdownThrottleTier {
+  threshold: number;
+  scale: number;
+}
+
 export interface RiskConfig {
   maxPositionSizePercent: number;
   stopLossPercent?: number;
   takeProfitPercent?: number;
   maxDailyLossPercent: number;
   maxDrawdownPercent: number;
+  maxDailyDrawdownPercent: number;
+  maxWeeklyDrawdownPercent: number;
   maxOpenPositions: number;
   maxTradesPerDay: number;
   minConfidenceThreshold: number;
   slippageProtectionPercent: number;
   mlShadowMode: boolean;
   mlRegimeGateEnabled: boolean;
+  drawdownCooldownMinutes: number;
+  drawdownThrottleTiers: DrawdownThrottleTier[];
 }
 
 export interface Position {
@@ -133,10 +142,12 @@ export interface AppState {
   systemHealth: SystemHealth;
   logs: LogEntry[];
   isEmergencyStopped: boolean;
+  haltReason: string | null;
 
   // Actions
   setRiskConfig: (config: Partial<RiskConfig>) => void;
   setTradingHalted: (halted: boolean) => void;
+  syncTradingHalt: (halted: boolean, reason?: string | null) => void;
   setDailyStats: (stats: { date: string; trades: number; loss: number }) => void;
   setPositions: (positions: Position[]) => void;
   setTrades: (trades: Trade[]) => void;
@@ -158,17 +169,24 @@ export interface AppState {
 // ============================================================
 
 const DEFAULT_RISK_CONFIG: RiskConfig = {
-  maxPositionSizePercent: 0.02,
+  maxPositionSizePercent: 0.01,
   stopLossPercent: 0.03,
   takeProfitPercent: 0.06,
   maxDailyLossPercent: 0.05,
   maxDrawdownPercent: 0.15,
+  maxDailyDrawdownPercent: 0.05,
+  maxWeeklyDrawdownPercent: 0.10,
   maxOpenPositions: 3,
   maxTradesPerDay: 10,
   minConfidenceThreshold: 0.65,
   slippageProtectionPercent: 0.005,
   mlShadowMode: false,
   mlRegimeGateEnabled: true,
+  drawdownCooldownMinutes: 60,
+  drawdownThrottleTiers: [
+    { threshold: 0.5, scale: 0.5 },
+    { threshold: 0.75, scale: 0.25 },
+  ],
 };
 
 // ============================================================
@@ -198,6 +216,7 @@ export const useAppStore = create<AppState>()(
       },
       logs: [],
       isEmergencyStopped: false,
+      haltReason: null,
 
       // Risk Management Actions
       setRiskConfig: (config) =>
@@ -206,7 +225,18 @@ export const useAppStore = create<AppState>()(
         })),
 
       setTradingHalted: (halted) =>
-        set({ tradingHalted: halted }),
+        set({
+          tradingHalted: halted,
+          isEmergencyStopped: halted,
+          haltReason: halted ? get().haltReason : null,
+        }),
+
+      syncTradingHalt: (halted, reason = null) =>
+        set({
+          tradingHalted: halted,
+          isEmergencyStopped: halted,
+          haltReason: halted ? reason || get().haltReason : null,
+        }),
 
       setDailyStats: (stats) =>
         set({ dailyStats: stats }),
@@ -263,7 +293,11 @@ export const useAppStore = create<AppState>()(
         set({ logs: [] }),
 
       setEmergencyStopped: (stopped) =>
-        set({ isEmergencyStopped: stopped }),
+        set({
+          isEmergencyStopped: stopped,
+          tradingHalted: stopped,
+          haltReason: stopped ? get().haltReason || 'EMERGENCY_STOP' : null,
+        }),
     }),
     {
       name: 'caliana-app-storage',

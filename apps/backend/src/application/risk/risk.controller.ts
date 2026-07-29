@@ -30,14 +30,30 @@ export class RiskController {
       status: 'ok',
       message: 'Emergency stop activated. Trading halted; positions flattening on exchange.',
       halted: this.positionManager.isTradingHalted(),
+      haltReason: this.positionManager.getHaltReason(),
     };
   }
 
   @Post('resume')
-  async resumeTrading() {
+  async resumeTrading(@Body() body?: { force?: boolean }) {
     this.logger.log('[RISK-CTRL] Resume trading dipicu dari UI');
-    await this.positionManager.resumeTrading();
-    return { status: 'ok', message: 'Trading resumed.', halted: false };
+    const result = await this.positionManager.resumeTrading(body?.force ?? false);
+    if (!result.resumed) {
+      return {
+        status: 'cooldown',
+        message: `Resume blocked — cooldown ${Math.ceil(result.cooldownRemainingMs / 60000)} minutes remaining. Use force=true to override.`,
+        halted: true,
+        haltReason: this.positionManager.getHaltReason(),
+        cooldownRemainingMs: result.cooldownRemainingMs,
+      };
+    }
+    return {
+      status: 'ok',
+      message: 'Trading resumed.',
+      halted: false,
+      haltReason: null,
+      cooldownRemainingMs: 0,
+    };
   }
 
   @Get('config')
@@ -62,6 +78,7 @@ export class RiskController {
     return {
       ...this.positionManager.getDailyStats(),
       halted: this.positionManager.isTradingHalted(),
+      haltReason: this.positionManager.getHaltReason(),
     };
   }
 
@@ -69,6 +86,7 @@ export class RiskController {
   getStatus() {
     return {
       halted: this.positionManager.isTradingHalted(),
+      haltReason: this.positionManager.getHaltReason(),
       openPositions: this.positionManager.getOpenPositions().length,
       dailyStats: this.positionManager.getDailyStats(),
       riskConfig: this.positionManager.getRiskConfig(),
@@ -135,5 +153,33 @@ export class RiskController {
       throw new BadRequestException(`No open position for ${symbol}`);
     }
     return { status: 'ok', position: updated };
+  }
+
+  // ─── Drawdown Management ────────────────────────────────────
+
+  @Get('drawdown/status')
+  getDrawdownStatus() {
+    return this.positionManager.getDrawdownStatus();
+  }
+
+  @Get('drawdown/history')
+  getDrawdownHistory() {
+    return this.positionManager.getDrawdownHistory();
+  }
+
+  @Get('drawdown/per-symbol')
+  getPerSymbolDrawdown() {
+    return this.positionManager.getPerSymbolDrawdown();
+  }
+
+  @Post('drawdown/reset-peak')
+  async resetPeakBalance(@Body() body?: { newPeak?: number }) {
+    this.logger.warn(`[RISK-CTRL] Peak balance reset requested`);
+    await this.positionManager.resetPeakBalance(body?.newPeak);
+    return {
+      status: 'ok',
+      message: 'Peak balance reset successfully.',
+      drawdown: this.positionManager.getDrawdownStatus(),
+    };
   }
 }

@@ -3,18 +3,23 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useAppStore } from '@/store/app-store';
 import { AlertTriangle, Ban, Play, ShieldAlert, Activity, Loader2 } from 'lucide-react';
-import { emergencyStopAll, resumeTrading } from '@/services/api-extended';
+import {
+  emergencyStopAll,
+  fetchRiskStatus,
+  resumeTrading,
+} from '@/services/api-extended';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
 export default function EmergencyCircuitBreaker() {
   const {
-    isEmergencyStopped,
+    tradingHalted,
+    haltReason,
     setEmergencyStopped,
-    setTradingHalted,
+    syncTradingHalt,
     addLog,
     addAlert,
     riskConfig,
@@ -24,13 +29,31 @@ export default function EmergencyCircuitBreaker() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    let cancelled = false;
+    const sync = async () => {
+      try {
+        const status = await fetchRiskStatus();
+        if (cancelled || typeof status?.halted !== 'boolean') return;
+        syncTradingHalt(status.halted, status.haltReason ?? null);
+      } catch {
+        // keep last known store state
+      }
+    };
+    sync();
+    const interval = setInterval(sync, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [syncTradingHalt]);
+
   const handleEmergencyStop = async () => {
     setLoading(true);
     setError(null);
     try {
-      await emergencyStopAll();
-      setEmergencyStopped(true);
-      setTradingHalted(true);
+      const res = await emergencyStopAll();
+      syncTradingHalt(true, res?.haltReason || 'EMERGENCY_STOP');
       setStopConfirmOpen(false);
       addAlert({
         id: `emergency-${Date.now()}`,
@@ -63,13 +86,19 @@ export default function EmergencyCircuitBreaker() {
     }
   };
 
-  const handleResume = async () => {
+  const handleResume = async (force = false) => {
     setLoading(true);
     setError(null);
     try {
-      await resumeTrading();
+      const res = await resumeTrading(force);
+      if (res.status === 'cooldown') {
+        const mins = Math.ceil((res.cooldownRemainingMs || 0) / 60000);
+        setError(`Cooldown active — ${mins} minutes remaining. Use "Force Resume" to override.`);
+        setResumeConfirmOpen(false);
+        return;
+      }
+      syncTradingHalt(false, null);
       setEmergencyStopped(false);
-      setTradingHalted(false);
       setResumeConfirmOpen(false);
       addAlert({
         id: `resume-${Date.now()}`,
@@ -95,6 +124,8 @@ export default function EmergencyCircuitBreaker() {
   };
 
   const pct = (v: number) => `${(Number(v) * 100).toFixed(1)}%`;
+  const reasonLabel = haltReason || 'UNKNOWN';
+  const isEmergency = reasonLabel === 'EMERGENCY_STOP';
 
   return (
     <div className="bg-slate-900/50 border border-slate-800/50 rounded-xl p-4 lg:p-6">
@@ -116,18 +147,22 @@ export default function EmergencyCircuitBreaker() {
 
       <div
         className={`p-4 rounded-lg border mb-4 ${
-          isEmergencyStopped
+          tradingHalted
             ? 'bg-red-500/10 border-red-500/30'
             : 'bg-slate-800/50 border-slate-700/50'
         }`}
       >
         <div className="flex items-center gap-3">
-          {isEmergencyStopped ? (
+          {tradingHalted ? (
             <>
               <Ban className="w-6 h-6 text-red-400" />
               <div>
-                <p className="text-sm font-semibold text-red-400">EMERGENCY STOPPED</p>
-                <p className="text-[10px] text-red-400/60">All trading activity is halted</p>
+                <p className="text-sm font-semibold text-red-400">
+                  {isEmergency ? 'EMERGENCY STOPPED' : 'TRADING HALTED'}
+                </p>
+                <p className="text-[10px] text-red-400/60">
+                  Reason: {reasonLabel} — resume required before new signals run
+                </p>
               </div>
             </>
           ) : (
@@ -142,7 +177,7 @@ export default function EmergencyCircuitBreaker() {
         </div>
       </div>
 
-      {!isEmergencyStopped ? (
+      {!tradingHalted ? (
         <button
           onClick={() => setStopConfirmOpen(true)}
           disabled={loading}
@@ -152,14 +187,26 @@ export default function EmergencyCircuitBreaker() {
           {loading ? 'Processing...' : 'EMERGENCY STOP ALL'}
         </button>
       ) : (
-        <button
-          onClick={() => setResumeConfirmOpen(true)}
-          disabled={loading}
-          className="w-full py-3 bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white font-medium text-sm rounded-lg transition-colors flex items-center justify-center gap-2 mb-4"
-        >
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-          {loading ? 'Resuming...' : 'Resume Trading'}
-        </button>
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => setResumeConfirmOpen(true)}
+            disabled={loading}
+            className="flex-1 py-3 bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white font-medium text-sm rounded-lg transition-colors flex items-center justify-center gap-2"
+          >
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+            {loading ? 'Resuming...' : 'Resume Trading'}
+          </button>
+          {['MAX_DRAWDOWN', 'MAX_DAILY_DRAWDOWN', 'MAX_WEEKLY_DRAWDOWN'].includes(reasonLabel) && (
+            <button
+              onClick={() => handleResume(true)}
+              disabled={loading}
+              className="py-3 px-4 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-medium text-xs rounded-lg transition-colors"
+              title="Skip cooldown and resume immediately"
+            >
+              Force
+            </button>
+          )}
+        </div>
       )}
 
       {/* Read-only server-side limits from risk config — no fake toggles */}
@@ -173,7 +220,19 @@ export default function EmergencyCircuitBreaker() {
         </p>
         <div className="space-y-1.5">
           <div className="flex items-center justify-between p-2.5 bg-slate-800/50 rounded-lg">
-            <span className="text-xs text-slate-300">Max Drawdown</span>
+            <span className="text-xs text-slate-300">Daily Drawdown</span>
+            <span className="text-xs font-mono text-slate-400">
+              {pct(riskConfig.maxDailyDrawdownPercent || 0)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between p-2.5 bg-slate-800/50 rounded-lg">
+            <span className="text-xs text-slate-300">Weekly Drawdown</span>
+            <span className="text-xs font-mono text-slate-400">
+              {pct(riskConfig.maxWeeklyDrawdownPercent || 0)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between p-2.5 bg-slate-800/50 rounded-lg">
+            <span className="text-xs text-slate-300">Max Drawdown (trailing)</span>
             <span className="text-xs font-mono text-slate-400">
               {pct(riskConfig.maxDrawdownPercent)}
             </span>
@@ -190,6 +249,14 @@ export default function EmergencyCircuitBreaker() {
               {riskConfig.maxTradesPerDay}x
             </span>
           </div>
+          {(riskConfig.drawdownCooldownMinutes || 0) > 0 && (
+            <div className="flex items-center justify-between p-2.5 bg-slate-800/50 rounded-lg">
+              <span className="text-xs text-slate-300">Cooldown After Halt</span>
+              <span className="text-xs font-mono text-slate-400">
+                {riskConfig.drawdownCooldownMinutes}min
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -213,7 +280,7 @@ export default function EmergencyCircuitBreaker() {
         confirmLabel="Resume Trading"
         variant="default"
         loading={loading}
-        onConfirm={handleResume}
+        onConfirm={() => handleResume(false)}
         onCancel={() => {
           if (!loading) setResumeConfirmOpen(false);
         }}

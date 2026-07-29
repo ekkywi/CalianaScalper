@@ -61,12 +61,24 @@ export interface RiskConfig {
     maxPositionSizePercent: number;
     maxDailyLossPercent: number;
     maxDrawdownPercent: number;
+    /** Daily drawdown limit — resets at midnight UTC. 0 = disabled. */
+    maxDailyDrawdownPercent: number;
+    /** Weekly drawdown limit — resets Monday 00:00 UTC. 0 = disabled. */
+    maxWeeklyDrawdownPercent: number;
     maxOpenPositions: number;
     maxTradesPerDay: number;
     minConfidenceThreshold: number;
     slippageProtectionPercent: number;
     mlShadowMode: boolean;
     mlRegimeGateEnabled: boolean;
+    /** Cooldown minutes after drawdown halt before resume is allowed. 0 = immediate. */
+    drawdownCooldownMinutes: number;
+    /**
+     * Gradual sizing tiers: at N% of max drawdown consumed, scale position size.
+     * E.g. [{ threshold: 0.5, scale: 0.5 }, { threshold: 0.75, scale: 0.25 }]
+     * means at 50% of max drawdown → 50% sizing, at 75% → 25% sizing.
+     */
+    drawdownThrottleTiers: DrawdownThrottleTier[];
     /**
      * @deprecated Not used for live execution. Kept for DB backward compatibility only.
      * Live SL/TP live on TradingProfileEntity.
@@ -78,16 +90,43 @@ export interface RiskConfig {
     takeProfitPercent?: number;
 }
 
+export interface DrawdownThrottleTier {
+    /** Fraction of maxDrawdownPercent consumed (0–1). E.g. 0.5 = 50% of limit used. */
+    threshold: number;
+    /** Scale factor for position size (0–1). E.g. 0.5 = half normal size. */
+    scale: number;
+}
+
+export interface DrawdownSnapshot {
+    timestamp: number;
+    equity: number;
+    peakBalance: number;
+    dailyPeak: number;
+    weeklyPeak: number;
+    drawdownPercent: number;
+    dailyDrawdownPercent: number;
+    weeklyDrawdownPercent: number;
+    throttleScale: number;
+    layer: 'ok' | 'daily' | 'weekly' | 'max';
+}
+
 export const DEFAULT_RISK_CONFIG: RiskConfig = {
-    maxPositionSizePercent: 0.02,
+    maxPositionSizePercent: 0.01,
     maxDailyLossPercent: 0.05,
     maxDrawdownPercent: 0.15,
+    maxDailyDrawdownPercent: 0.05,
+    maxWeeklyDrawdownPercent: 0.10,
     maxOpenPositions: 3,
     maxTradesPerDay: 10,
     minConfidenceThreshold: 0.65,
     slippageProtectionPercent: 0.005,
     mlShadowMode: false,
     mlRegimeGateEnabled: true,
+    drawdownCooldownMinutes: 60,
+    drawdownThrottleTiers: [
+        { threshold: 0.5, scale: 0.5 },
+        { threshold: 0.75, scale: 0.25 },
+    ],
     stopLossPercent: 0.03,
     takeProfitPercent: 0.06,
 };
@@ -161,4 +200,6 @@ export const MARKET_EVENTS = {
     TRADING_HALTED: 'trading.halted',
     TRADING_RESUMED: 'trading.resumed',
     TRADING_MODE_CHANGED: 'trading.mode.changed',
+    DRAWDOWN_ALERT: 'drawdown.alert',
+    DRAWDOWN_SNAPSHOT: 'drawdown.snapshot',
 };

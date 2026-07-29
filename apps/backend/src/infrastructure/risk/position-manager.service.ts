@@ -20,6 +20,8 @@ import {
     AccountBalance,
     CandleData,
     MlTradeContext,
+    DrawdownSnapshot,
+    DrawdownThrottleTier,
 } from '../../core/domain/market.types';
 import { OrderEntity } from '../database/order.entity';
 import { PositionEntity } from '../database/position.entity';
@@ -36,15 +38,33 @@ export class PositionManagerService implements OnModuleInit {
     private positionsCache: Map<string, Position> = new Map();
     private riskConfig: RiskConfig;
     private tradingHalted: boolean = false;
-    private dailyStats: { date: string; trades: number; loss: number; peakBalance: number } = {
+    private haltReason: string | null = null;
+    private haltedAt: number | null = null;
+    private dailyStats: {
+        date: string;
+        trades: number;
+        loss: number;
+        peakBalance: number;
+        dailyPeak: number;
+        weeklyPeak: number;
+        weekStart: string;
+    } = {
         date: this.getTodayDate(),
         trades: 0,
         loss: 0,
         peakBalance: 0,
+        dailyPeak: 0,
+        weeklyPeak: 0,
+        weekStart: this.getWeekStartDate(),
     };
+    private drawdownHistory: DrawdownSnapshot[] = [];
+    private perSymbolDrawdown: Map<string, { peak: number; current: number }> = new Map();
+    private drawdownAlertEmitted: Set<string> = new Set();
 
     private static readonly HALT_CONFIG_KEY = 'trading_halted';
     private static readonly PEAK_BALANCE_KEY = 'peak_balance';
+    private static readonly DRAWDOWN_PEAKS_KEY = 'drawdown_peaks';
+    private static readonly DRAWDOWN_HISTORY_KEY = 'drawdown_history';
 
     constructor(
         private readonly eventEmitter: EventEmitter2,
@@ -109,23 +129,57 @@ export class PositionManagerService implements OnModuleInit {
                 ? Number((peakEntity.value as { peakBalance?: number }).peakBalance) || 0
                 : 0;
 
+            // 4b. Load daily/weekly peaks
+            const peaksEntity = await this.configRepo.findOne({
+                where: { key: PositionManagerService.DRAWDOWN_PEAKS_KEY },
+            });
+            const peaks = peaksEntity?.value as {
+                dailyPeak?: number;
+                dailyDate?: string;
+                weeklyPeak?: number;
+                weekStart?: string;
+            } | undefined;
+            const weekStart = this.getWeekStartDate();
+            const dailyPeak = (peaks?.dailyDate === today ? peaks?.dailyPeak : 0) || 0;
+            const weeklyPeak = (peaks?.weekStart === weekStart ? peaks?.weeklyPeak : 0) || 0;
+
             this.dailyStats = {
                 date: today,
                 trades: todayTrades.length,
                 loss: totalLoss,
                 peakBalance,
+                dailyPeak,
+                weeklyPeak,
+                weekStart,
             };
+
+            // 4c. Load drawdown history
+            const histEntity = await this.configRepo.findOne({
+                where: { key: PositionManagerService.DRAWDOWN_HISTORY_KEY },
+            });
+            if (histEntity?.value && Array.isArray((histEntity.value as any).snapshots)) {
+                this.drawdownHistory = (histEntity.value as any).snapshots;
+            }
 
             // 5. Load trading halt flag (survives restart)
             const haltEntity = await this.configRepo.findOne({
                 where: { key: PositionManagerService.HALT_CONFIG_KEY },
             });
             if (haltEntity?.value) {
-                this.tradingHalted = Boolean(
-                    (haltEntity.value as { halted?: boolean }).halted,
-                );
+                const haltVal = haltEntity.value as {
+                    halted?: boolean;
+                    reason?: string | null;
+                    haltedAt?: number | null;
+                };
+                this.tradingHalted = Boolean(haltVal.halted);
+                this.haltReason = this.tradingHalted
+                    ? haltVal.reason || 'UNKNOWN'
+                    : null;
+                this.haltedAt = haltVal.haltedAt ?? null;
                 if (this.tradingHalted) {
-                    this.logger.warn('[PERSIST] Trading was halted — remaining halted after restart');
+                    this.logger.warn(
+                        `[PERSIST] Trading was halted (${this.haltReason}) — remaining halted after restart`,
+                    );
                 }
             }
 
@@ -140,7 +194,11 @@ export class PositionManagerService implements OnModuleInit {
             const existing = await this.configRepo.findOne({
                 where: { key: PositionManagerService.HALT_CONFIG_KEY },
             });
-            const value = { halted: this.tradingHalted };
+            const value = {
+                halted: this.tradingHalted,
+                reason: this.tradingHalted ? this.haltReason : null,
+                haltedAt: this.tradingHalted ? this.haltedAt : null,
+            };
             if (existing) {
                 existing.value = value as any;
                 existing.updatedAt = Date.now();
@@ -180,29 +238,284 @@ export class PositionManagerService implements OnModuleInit {
     }
 
     /**
-     * Update equity peak and halt if max drawdown is breached.
+     * Compute current equity = balance + sum(unrealizedPnL of all open positions).
+     */
+    private computeEquity(currentBalance: number): number {
+        let totalUnrealized = 0;
+        for (const pos of this.positionsCache.values()) {
+            if (pos.status === 'OPEN') {
+                totalUnrealized += pos.unrealizedPnL || 0;
+            }
+        }
+        return currentBalance + totalUnrealized;
+    }
+
+    /**
+     * Get the drawdown throttle scale factor (1.0 = normal, <1 = reduced sizing).
+     */
+    getDrawdownThrottleScale(currentBalance?: number): number {
+        const equity = currentBalance != null ? this.computeEquity(currentBalance) : 0;
+        const peak = this.dailyStats.peakBalance;
+        if (peak <= 0 || equity >= peak) return 1;
+
+        const ddFraction = (peak - equity) / peak / this.riskConfig.maxDrawdownPercent;
+        const tiers = [...(this.riskConfig.drawdownThrottleTiers || [])]
+            .sort((a, b) => b.threshold - a.threshold);
+
+        for (const tier of tiers) {
+            if (ddFraction >= tier.threshold) return tier.scale;
+        }
+        return 1;
+    }
+
+    /**
+     * Multi-layer equity-based drawdown check.
+     * Layers: daily → weekly → max (all-time trailing).
+     * Emits alerts at 50% and 75% of each limit.
      */
     async updateEquityAndCheckDrawdown(currentBalance: number): Promise<boolean> {
         if (currentBalance <= 0) return !this.tradingHalted;
 
-        if (currentBalance > this.dailyStats.peakBalance) {
-            this.dailyStats.peakBalance = currentBalance;
+        this.resetDrawdownPeriodsIfNeeded();
+        const equity = this.computeEquity(currentBalance);
+
+        // Update peaks
+        if (equity > this.dailyStats.peakBalance) {
+            this.dailyStats.peakBalance = equity;
             await this.persistPeakBalance();
         }
+        if (equity > this.dailyStats.dailyPeak) {
+            this.dailyStats.dailyPeak = equity;
+        }
+        if (equity > this.dailyStats.weeklyPeak) {
+            this.dailyStats.weeklyPeak = equity;
+        }
+        await this.persistDrawdownPeaks();
 
         const peak = this.dailyStats.peakBalance;
-        if (peak > 0) {
-            const drawdown = (peak - currentBalance) / peak;
-            if (drawdown >= this.riskConfig.maxDrawdownPercent) {
-                this.logger.error(
-                    `[DRAWDOWN] Drawdown ${(drawdown * 100).toFixed(2)}% >= ` +
-                    `max ${(this.riskConfig.maxDrawdownPercent * 100).toFixed(2)}%`,
-                );
-                await this.haltTrading('MAX_DRAWDOWN');
-                return false;
+        const dailyPeak = this.dailyStats.dailyPeak;
+        const weeklyPeak = this.dailyStats.weeklyPeak;
+
+        const ddMax = peak > 0 ? (peak - equity) / peak : 0;
+        const ddDaily = dailyPeak > 0 ? (dailyPeak - equity) / dailyPeak : 0;
+        const ddWeekly = weeklyPeak > 0 ? (weeklyPeak - equity) / weeklyPeak : 0;
+
+        // Emit alerts at 50% and 75% of each limit
+        this.emitDrawdownAlerts('daily', ddDaily, this.riskConfig.maxDailyDrawdownPercent);
+        this.emitDrawdownAlerts('weekly', ddWeekly, this.riskConfig.maxWeeklyDrawdownPercent);
+        this.emitDrawdownAlerts('max', ddMax, this.riskConfig.maxDrawdownPercent);
+
+        const throttle = this.getDrawdownThrottleScale(currentBalance);
+
+        // Record snapshot
+        const snapshot: DrawdownSnapshot = {
+            timestamp: Date.now(),
+            equity,
+            peakBalance: peak,
+            dailyPeak,
+            weeklyPeak,
+            drawdownPercent: ddMax,
+            dailyDrawdownPercent: ddDaily,
+            weeklyDrawdownPercent: ddWeekly,
+            throttleScale: throttle,
+            layer: 'ok',
+        };
+
+        // Layer 1: Daily drawdown
+        if (this.riskConfig.maxDailyDrawdownPercent > 0 && ddDaily >= this.riskConfig.maxDailyDrawdownPercent) {
+            this.logger.error(
+                `[DRAWDOWN-DAILY] ${(ddDaily * 100).toFixed(2)}% >= limit ${(this.riskConfig.maxDailyDrawdownPercent * 100).toFixed(2)}%`,
+            );
+            snapshot.layer = 'daily';
+            this.recordDrawdownSnapshot(snapshot);
+            await this.haltTrading('MAX_DAILY_DRAWDOWN');
+            return false;
+        }
+
+        // Layer 2: Weekly drawdown
+        if (this.riskConfig.maxWeeklyDrawdownPercent > 0 && ddWeekly >= this.riskConfig.maxWeeklyDrawdownPercent) {
+            this.logger.error(
+                `[DRAWDOWN-WEEKLY] ${(ddWeekly * 100).toFixed(2)}% >= limit ${(this.riskConfig.maxWeeklyDrawdownPercent * 100).toFixed(2)}%`,
+            );
+            snapshot.layer = 'weekly';
+            this.recordDrawdownSnapshot(snapshot);
+            await this.haltTrading('MAX_WEEKLY_DRAWDOWN');
+            return false;
+        }
+
+        // Layer 3: Max (all-time trailing) drawdown
+        if (peak > 0 && ddMax >= this.riskConfig.maxDrawdownPercent) {
+            this.logger.error(
+                `[DRAWDOWN] ${(ddMax * 100).toFixed(2)}% >= max ${(this.riskConfig.maxDrawdownPercent * 100).toFixed(2)}%`,
+            );
+            snapshot.layer = 'max';
+            this.recordDrawdownSnapshot(snapshot);
+            await this.haltTrading('MAX_DRAWDOWN');
+            return false;
+        }
+
+        this.recordDrawdownSnapshot(snapshot);
+        return !this.tradingHalted;
+    }
+
+    private emitDrawdownAlerts(layer: string, current: number, limit: number): void {
+        if (limit <= 0) return;
+        const pct = current / limit;
+        for (const level of [0.5, 0.75]) {
+            const key = `${layer}_${level}`;
+            if (pct >= level && !this.drawdownAlertEmitted.has(key)) {
+                this.drawdownAlertEmitted.add(key);
+                const msg = `[DRAWDOWN-ALERT] ${layer} drawdown at ${(current * 100).toFixed(1)}% — ${(level * 100).toFixed(0)}% of ${(limit * 100).toFixed(1)}% limit`;
+                this.logger.warn(msg);
+                this.eventEmitter.emit(MARKET_EVENTS.DRAWDOWN_ALERT, {
+                    layer,
+                    level,
+                    currentPercent: current,
+                    limitPercent: limit,
+                    message: msg,
+                });
+            }
+            if (pct < level && this.drawdownAlertEmitted.has(key)) {
+                this.drawdownAlertEmitted.delete(key);
             }
         }
-        return !this.tradingHalted;
+    }
+
+    private recordDrawdownSnapshot(snapshot: DrawdownSnapshot): void {
+        this.drawdownHistory.push(snapshot);
+        if (this.drawdownHistory.length > 500) {
+            this.drawdownHistory = this.drawdownHistory.slice(-500);
+        }
+        this.eventEmitter.emit(MARKET_EVENTS.DRAWDOWN_SNAPSHOT, snapshot);
+        this.persistDrawdownHistory().catch(() => {});
+    }
+
+    /**
+     * Track per-symbol drawdown from realized + unrealized PnL.
+     */
+    updatePerSymbolDrawdown(symbol: string, equity: number): void {
+        const existing = this.perSymbolDrawdown.get(symbol);
+        if (!existing) {
+            this.perSymbolDrawdown.set(symbol, { peak: equity, current: equity });
+        } else {
+            if (equity > existing.peak) existing.peak = equity;
+            existing.current = equity;
+        }
+    }
+
+    getPerSymbolDrawdown(): Record<string, { peak: number; current: number; drawdownPercent: number }> {
+        const result: Record<string, { peak: number; current: number; drawdownPercent: number }> = {};
+        for (const [sym, data] of this.perSymbolDrawdown.entries()) {
+            const dd = data.peak > 0 ? (data.peak - data.current) / data.peak : 0;
+            result[sym] = { ...data, drawdownPercent: dd };
+        }
+        return result;
+    }
+
+    private async persistDrawdownPeaks(): Promise<void> {
+        try {
+            const existing = await this.configRepo.findOne({
+                where: { key: PositionManagerService.DRAWDOWN_PEAKS_KEY },
+            });
+            const value = {
+                dailyPeak: this.dailyStats.dailyPeak,
+                dailyDate: this.dailyStats.date,
+                weeklyPeak: this.dailyStats.weeklyPeak,
+                weekStart: this.dailyStats.weekStart,
+            };
+            if (existing) {
+                existing.value = value as any;
+                existing.updatedAt = Date.now();
+                await this.configRepo.save(existing);
+            } else {
+                await this.configRepo.save({
+                    key: PositionManagerService.DRAWDOWN_PEAKS_KEY,
+                    value: value as any,
+                    updatedAt: Date.now(),
+                });
+            }
+        } catch (err) {
+            this.logger.error(`[PERSIST] Failed to persist drawdown peaks: ${err.message}`);
+        }
+    }
+
+    private async persistDrawdownHistory(): Promise<void> {
+        try {
+            const existing = await this.configRepo.findOne({
+                where: { key: PositionManagerService.DRAWDOWN_HISTORY_KEY },
+            });
+            const value = { snapshots: this.drawdownHistory.slice(-200) };
+            if (existing) {
+                existing.value = value as any;
+                existing.updatedAt = Date.now();
+                await this.configRepo.save(existing);
+            } else {
+                await this.configRepo.save({
+                    key: PositionManagerService.DRAWDOWN_HISTORY_KEY,
+                    value: value as any,
+                    updatedAt: Date.now(),
+                });
+            }
+        } catch (err) {
+            this.logger.error(`[PERSIST] Failed to persist drawdown history: ${err.message}`);
+        }
+    }
+
+    getDrawdownHistory(): DrawdownSnapshot[] {
+        return [...this.drawdownHistory];
+    }
+
+    getDrawdownStatus(): {
+        equity: number;
+        peakBalance: number;
+        dailyPeak: number;
+        weeklyPeak: number;
+        drawdownPercent: number;
+        dailyDrawdownPercent: number;
+        weeklyDrawdownPercent: number;
+        throttleScale: number;
+        cooldownRemainingMs: number;
+    } {
+        const peak = this.dailyStats.peakBalance;
+        const dailyPeak = this.dailyStats.dailyPeak;
+        const weeklyPeak = this.dailyStats.weeklyPeak;
+        const equity = peak;
+        const dd = peak > 0 ? Math.max(0, (peak - equity) / peak) : 0;
+        const ddDaily = dailyPeak > 0 ? Math.max(0, (dailyPeak - equity) / dailyPeak) : 0;
+        const ddWeekly = weeklyPeak > 0 ? Math.max(0, (weeklyPeak - equity) / weeklyPeak) : 0;
+        return {
+            equity,
+            peakBalance: peak,
+            dailyPeak,
+            weeklyPeak,
+            drawdownPercent: dd,
+            dailyDrawdownPercent: ddDaily,
+            weeklyDrawdownPercent: ddWeekly,
+            throttleScale: this.getDrawdownThrottleScale(),
+            cooldownRemainingMs: this.getCooldownRemainingMs(),
+        };
+    }
+
+    /**
+     * Reset peak balance (admin action after review).
+     * Optionally set to a specific value, or reset to 0 (next balance reading becomes new peak).
+     */
+    async resetPeakBalance(newPeak?: number): Promise<void> {
+        this.dailyStats.peakBalance = newPeak ?? 0;
+        this.dailyStats.dailyPeak = newPeak ?? 0;
+        this.dailyStats.weeklyPeak = newPeak ?? 0;
+        this.drawdownAlertEmitted.clear();
+        await this.persistPeakBalance();
+        await this.persistDrawdownPeaks();
+        this.logger.log(`[DRAWDOWN] Peak balance reset to ${this.dailyStats.peakBalance}`);
+    }
+
+    private getCooldownRemainingMs(): number {
+        if (!this.haltedAt || !this.tradingHalted) return 0;
+        const cooldownMs = (this.riskConfig.drawdownCooldownMinutes || 0) * 60 * 1000;
+        if (cooldownMs <= 0) return 0;
+        const elapsed = Date.now() - this.haltedAt;
+        return Math.max(0, cooldownMs - elapsed);
     }
 
     /**
@@ -361,16 +674,60 @@ export class PositionManagerService implements OnModuleInit {
         return new Date().toISOString().split('T')[0];
     }
 
+    private getWeekStartDate(): string {
+        const d = new Date();
+        const day = d.getUTCDay();
+        const diff = day === 0 ? 6 : day - 1;
+        d.setUTCDate(d.getUTCDate() - diff);
+        return d.toISOString().split('T')[0];
+    }
+
     private resetDailyStatsIfNeeded(): void {
         const today = this.getTodayDate();
+        const weekStart = this.getWeekStartDate();
         if (this.dailyStats.date !== today) {
+            const prevPeak = this.dailyStats.peakBalance;
+            const prevWeeklyPeak = this.dailyStats.weekStart === weekStart
+                ? this.dailyStats.weeklyPeak
+                : 0;
             this.dailyStats = {
                 date: today,
                 trades: 0,
                 loss: 0,
-                peakBalance: 0,
+                peakBalance: prevPeak,
+                dailyPeak: 0,
+                weeklyPeak: prevWeeklyPeak,
+                weekStart,
             };
+            this.drawdownAlertEmitted.clear();
+
+            // Auto-resume daily drawdown halts at midnight
+            if (this.tradingHalted && this.haltReason === 'MAX_DAILY_DRAWDOWN') {
+                this.logger.log('[DRAWDOWN] Daily reset — auto-resuming from MAX_DAILY_DRAWDOWN halt');
+                this.tradingHalted = false;
+                this.haltReason = null;
+                this.haltedAt = null;
+                this.persistHaltState().catch(() => {});
+                this.eventEmitter.emit(MARKET_EVENTS.TRADING_RESUMED, { reason: 'daily_reset' });
+            }
         }
+        if (this.dailyStats.weekStart !== weekStart) {
+            this.dailyStats.weeklyPeak = 0;
+            this.dailyStats.weekStart = weekStart;
+
+            if (this.tradingHalted && this.haltReason === 'MAX_WEEKLY_DRAWDOWN') {
+                this.logger.log('[DRAWDOWN] Weekly reset — auto-resuming from MAX_WEEKLY_DRAWDOWN halt');
+                this.tradingHalted = false;
+                this.haltReason = null;
+                this.haltedAt = null;
+                this.persistHaltState().catch(() => {});
+                this.eventEmitter.emit(MARKET_EVENTS.TRADING_RESUMED, { reason: 'weekly_reset' });
+            }
+        }
+    }
+
+    private resetDrawdownPeriodsIfNeeded(): void {
+        this.resetDailyStatsIfNeeded();
     }
 
     /**
@@ -394,6 +751,10 @@ export class PositionManagerService implements OnModuleInit {
      */
     isTradingHalted(): boolean {
         return this.tradingHalted;
+    }
+
+    getHaltReason(): string | null {
+        return this.tradingHalted ? this.haltReason : null;
     }
 
     /**
@@ -440,12 +801,15 @@ export class PositionManagerService implements OnModuleInit {
         const slPercent = exec.stopLossPercent;
         const stopLossDistance = entryPrice * slPercent;
         
-        const positionSize = riskAmount / stopLossDistance;
+        const throttle = this.getDrawdownThrottleScale(balance.total);
+        const scaledRisk = riskAmount * throttle;
+        const positionSize = scaledRisk / stopLossDistance;
         const roundedSize = Math.floor(positionSize * 1000000) / 1000000;
         
         this.logger.log(
             `[POSITION-SIZING] Balance: ${balance.total} USDT | ` +
-            `RiskAmount: ${riskAmount.toFixed(2)} USDT | ` +
+            `RiskAmount: ${riskAmount.toFixed(2)} USDT | Throttle: ${throttle} | ` +
+            `ScaledRisk: ${scaledRisk.toFixed(2)} USDT | ` +
             `EntryPrice: ${entryPrice} | SL ${(slPercent * 100).toFixed(2)}% Distance: ${stopLossDistance.toFixed(2)} | ` +
             `Size: ${roundedSize}`
         );
@@ -667,6 +1031,10 @@ export class PositionManagerService implements OnModuleInit {
                 ? (currentPrice - position.entryPrice) * position.quantity
                 : (position.entryPrice - currentPrice) * position.quantity;
 
+            // Per-symbol drawdown tracking
+            const symEquity = position.entryPrice * position.quantity + position.unrealizedPnL;
+            this.updatePerSymbolDrawdown(position.symbol, symEquity);
+
             // Persist unrealized PnL to DB
             try {
                 await this.positionRepo.update(
@@ -730,6 +1098,8 @@ export class PositionManagerService implements OnModuleInit {
      */
     private async haltTrading(reason: string): Promise<void> {
         this.tradingHalted = true;
+        this.haltReason = reason;
+        this.haltedAt = Date.now();
         await this.persistHaltState();
         this.logger.error(`[RISK-BREACH] Trading dihentikan: ${reason}`);
         this.eventEmitter.emit(MARKET_EVENTS.RISK_BREACHED, { reason });
@@ -739,11 +1109,23 @@ export class PositionManagerService implements OnModuleInit {
     /**
      * Resume trading after risk breach
      */
-    async resumeTrading(): Promise<void> {
+    async resumeTrading(force = false): Promise<{ resumed: boolean; cooldownRemainingMs: number }> {
+        const remaining = this.getCooldownRemainingMs();
+        const isDrawdownHalt = ['MAX_DRAWDOWN', 'MAX_DAILY_DRAWDOWN', 'MAX_WEEKLY_DRAWDOWN'].includes(this.haltReason || '');
+        if (!force && isDrawdownHalt && remaining > 0) {
+            this.logger.warn(
+                `[RISK] Resume blocked — cooldown ${Math.ceil(remaining / 60000)}min remaining`,
+            );
+            return { resumed: false, cooldownRemainingMs: remaining };
+        }
         this.tradingHalted = false;
+        this.haltReason = null;
+        this.haltedAt = null;
+        this.drawdownAlertEmitted.clear();
         await this.persistHaltState();
         this.logger.log('[RISK] Trading dilanjutkan kembali.');
         this.eventEmitter.emit(MARKET_EVENTS.TRADING_RESUMED, {});
+        return { resumed: true, cooldownRemainingMs: 0 };
     }
 
     /**
