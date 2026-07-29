@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { fetchSystemHealth, type TradingMode } from '@/services/api-extended';
 import { socket } from '@/services/socket';
 import { binanceTickerWS } from '@/services/binance-ws';
+import { useAppStore } from '@/store/app-store';
 
 type Lamp = {
   key: string;
@@ -12,6 +13,7 @@ type Lamp = {
 };
 
 export default function ConnectionStatus() {
+  const syncTradingHalt = useAppStore((s) => s.syncTradingHalt);
   const [apiOk, setApiOk] = useState(false);
   const [socketOk, setSocketOk] = useState(false);
   const [marketOk, setMarketOk] = useState(false);
@@ -27,6 +29,12 @@ export default function ConnectionStatus() {
           setApiOk(true);
           if (health?.tradingMode === 'paper' || health?.tradingMode === 'live') {
             setTradingMode(health.tradingMode);
+          }
+          if (typeof health?.tradingHalted === 'boolean') {
+            syncTradingHalt(
+              health.tradingHalted,
+              health.tradingHaltReason ?? null,
+            );
           }
         }
       } catch {
@@ -51,6 +59,15 @@ export default function ConnectionStatus() {
     };
     socket.on('trading-mode-changed', onMode);
 
+    const onHalted = (event: { reason?: string }) => {
+      syncTradingHalt(true, event?.reason || 'UNKNOWN');
+    };
+    const onResumed = () => {
+      syncTradingHalt(false, null);
+    };
+    socket.on('trading-halted', onHalted);
+    socket.on('trading-resumed', onResumed);
+
     const unsubMarket = binanceTickerWS.onStatusChange((connected) => {
       setMarketOk(connected);
     });
@@ -62,9 +79,11 @@ export default function ConnectionStatus() {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('trading-mode-changed', onMode);
+      socket.off('trading-halted', onHalted);
+      socket.off('trading-resumed', onResumed);
       unsubMarket();
     };
-  }, []);
+  }, [syncTradingHalt]);
 
   const lamps: Lamp[] = [
     { key: 'api', label: 'Backend API', ok: apiOk },

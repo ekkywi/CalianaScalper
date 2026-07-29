@@ -1,0 +1,86 @@
+{
+  "accuracy": 0.3914285714285714,
+  "n_train": 1400,
+  "n_val": 350,
+  "sub_models": {
+    "xgboost": {
+      "accuracy": 0.34,
+      "precision_buy": null,
+      "recall_buy": 0.0,
+      "f1_buy": null,
+      "n_val": 350,
+      "val_tp": 0,
+      "val_fp": 0,
+      "val_fn": 231,
+      "val_tn": 119,
+      "val_predicted_buy": 0,
+      "val_actual_buy": 231,
+      "n_train": 1400,
+      "scale_pos_weight": 1.0808561236623069
+    },
+    "lightgbm": {
+      "accuracy": 0.4257142857142857,
+      "precision_buy": 0.6013513513513513,
+      "recall_buy": 0.3852813852813853,
+      "f1_buy": 0.46965699208443273,
+      "n_val": 350,
+      "val_tp": 89,
+      "val_fp": 59,
+      "val_fn": 142,
+      "val_tn": 60,
+      "val_predicted_buy": 148,
+      "val_actual_buy": 231,
+      "n_train": 1400,
+      "scale_pos_weight": 1.0808561236623069
+    },
+    "logreg": {
+      "accuracy": 0.37142857142857144,
+      "precision_buy": 0.5486725663716814,
+      "recall_buy": 0.2683982683982684,
+      "f1_buy": 0.3604651162790698,
+      "n_val": 350,
+      "val_tp": 62,
+      "val_fp": 51,
+      "val_fn": 169,
+      "val_tn": 68,
+      "val_predicted_buy": 113,
+      "val_actual_buy": 231,
+      "n_train": 1400
+    }
+  },
+  "ensemble_members": [
+    "xgboost",
+    "lightgbm",
+    "logreg"
+  ],
+  "ensemble_weights": {
+    "xgboost": 0.4,
+    "lightgbm": 0.4,
+    "logreg": 0.2
+  },
+  "precision_buy": 0.5681818181818182,
+  "recall_buy": 0.3246753246753247,
+  "f1_buy": 0.4132231404958678,
+  "val_tp": 75,
+  "val_fp": 57,
+  "val_fn": 156,
+  "val_tn": 62,
+  "val_predicted_buy": 132,
+  "val_actual_buy": 231,
+  "algorithm": "ensemble",
+  "algorithm_name": "Ensemble (XGB+LGBM+LR)",
+  "trained_at": 1785307777934,
+  "label_config": {
+    "stop_loss_percent": 0.005,
+    "take_profit_percent": 0.01,
+    "max_horizon_candles": 96,
+    "round_trip_fee_percent": 0.002,
+    "label_mode": "tp_before_sl"
+  },
+  "model_id": "d9ecdd461faf46ab",
+  "name": "BTC-SL0.5/TP1/HR96",
+  "n_labeled": 1750,
+  "n_positive": 841,
+  "n_negative": 909,
+  "positive_rate": 0.4805714285714286
+}

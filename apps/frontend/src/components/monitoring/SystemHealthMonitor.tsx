@@ -15,6 +15,7 @@ type Health = {
   exchange: boolean;
   uptime: number;
   tradingHalted?: boolean;
+  tradingHaltReason?: string | null;
   openPositions?: number;
   lastError?: string;
 };
@@ -59,6 +60,7 @@ export default function SystemHealthMonitor() {
     exchange: health?.exchange ?? false,
     uptime: health?.uptime ?? 0,
     tradingHalted: health?.tradingHalted,
+    tradingHaltReason: health?.tradingHaltReason,
     openPositions: health?.openPositions,
     lastError: health?.lastError,
   };
@@ -135,7 +137,10 @@ export default function SystemHealthMonitor() {
       </div>
 
       {merged.tradingHalted && (
-        <p className="text-xs text-amber-400 mt-2">Trading is currently HALTED</p>
+        <p className="text-xs text-amber-400 mt-2">
+          Trading is currently HALTED
+          {merged.tradingHaltReason ? ` (${merged.tradingHaltReason})` : ''}
+        </p>
       )}
       {typeof merged.openPositions === 'number' && (
         <p className="text-[10px] text-slate-500 mt-1">

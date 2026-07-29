@@ -56,10 +56,10 @@ Earlier: multi-symbol on-demand + Next UI scaffolding (`a3ac093`).
 
 ### Automated bot
 
-- Candle closed → ML signal (BUY/SELL/HOLD) → confidence gate → trade
+- Candle closed → SL/TP check → ML predict+persist (always) → if flat: BUY entry gates; if holding: ignore BUY, optional SELL close (`CLOSED_BY_SIGNAL`)
 - Position sizing from risk config + **active profile SL**; max open positions / trades / daily loss / drawdown
-- BUY opens LONG after fill; SELL closes LONG (no short in spot mode)
-- **SL/TP:** from active trading profile → monitor → `flattenAndClose` (exchange first, then ledger)
+- BUY opens LONG after fill; SELL closes LONG while holding (no short when flat)
+- **SL/TP:** from active trading profile → monitor → `flattenAndClose` (exchange first, then ledger); primary exit over ML
 - **Emergency stop / resume:** halt in `system_config`; flattens with real quantity
 - Pre-trade `canOpenPosition`; ledger open failure after fill → emergency flatten attempt
 - Symbols CRUD + candle backfill + WS subscribe on demand

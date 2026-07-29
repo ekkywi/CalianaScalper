@@ -50,7 +50,7 @@ export default function MlShadowLogPanel() {
           <div>
             <h2 className="text-sm font-semibold text-white">Shadow ML Log</h2>
             <p className="text-[10px] text-slate-500">
-              Would-be BUY when shadow mode is on (no orders placed)
+              Would-be BUY when shadow mode is on (persisted across restarts)
             </p>
           </div>
         </div>
@@ -66,7 +66,7 @@ export default function MlShadowLogPanel() {
       {error && <p className="text-xs text-red-400 mb-3">{error}</p>}
       {!loading && rows.length === 0 && !error && (
         <p className="text-xs text-slate-500 py-4 text-center">
-          Empty — enable Shadow mode on Risk page and wait for BUY signals
+          Empty — enable Shadow mode on Risk page and wait for BUY signals (log survives Nest restart)
         </p>
       )}
 

@@ -28,6 +28,7 @@ import { join } from 'path';
 import { TradingProfileEntity } from './infrastructure/database/trading-profile.entity';
 import { MlModelRegistryEntity } from './infrastructure/database/ml-model-registry.entity';
 import { SymbolStrategyBindingEntity } from './infrastructure/database/symbol-strategy-binding.entity';
+import { MlPredictionEventEntity } from './infrastructure/database/ml-prediction-event.entity';
 
 @Module({
   imports: [
@@ -74,6 +75,7 @@ import { SymbolStrategyBindingEntity } from './infrastructure/database/symbol-st
             TradingProfileEntity,
             MlModelRegistryEntity,
             SymbolStrategyBindingEntity,
+            MlPredictionEventEntity,
           ],
           synchronize: true,
         };

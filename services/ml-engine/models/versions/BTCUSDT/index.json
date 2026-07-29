@@ -1,0 +1,29 @@
+{
+  "symbol": "BTCUSDT",
+  "active_model_id": "d9ecdd461faf46ab",
+  "models": [
+    {
+      "model_id": "d9ecdd461faf46ab",
+      "name": "BTC-SL0.5/TP1/HR96",
+      "algorithm": "ensemble",
+      "trained_at": 1785307777934,
+      "label_config": {
+        "stop_loss_percent": 0.005,
+        "take_profit_percent": 0.01,
+        "max_horizon_candles": 96,
+        "round_trip_fee_percent": 0.002,
+        "label_mode": "tp_before_sl"
+      },
+      "metrics_summary": {
+        "accuracy": 0.3914285714285714,
+        "precision_buy": 0.5681818181818182,
+        "recall_buy": 0.3246753246753247,
+        "f1_buy": 0.4132231404958678,
+        "n_train": 1400,
+        "n_val": 350,
+        "n_positive": 841,
+        "positive_rate": 0.4805714285714286
+      }
+    }
+  ]
+}

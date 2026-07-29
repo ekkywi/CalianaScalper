@@ -1,0 +1,29 @@
+{
+  "symbol": "ETHUSDT",
+  "active_model_id": "2ff6116e5f934e82",
+  "models": [
+    {
+      "model_id": "2ff6116e5f934e82",
+      "name": "ETHSL0.5/TP1/HR96",
+      "algorithm": "ensemble",
+      "trained_at": 1785307940492,
+      "label_config": {
+        "stop_loss_percent": 0.005,
+        "take_profit_percent": 0.01,
+        "max_horizon_candles": 96,
+        "round_trip_fee_percent": 0.002,
+        "label_mode": "tp_before_sl"
+      },
+      "metrics_summary": {
+        "accuracy": 0.7405405405405405,
+        "precision_buy": 0.8807339449541285,
+        "recall_buy": 0.732824427480916,
+        "f1_buy": 0.8000000000000002,
+        "n_train": 1476,
+        "n_val": 370,
+        "n_positive": 999,
+        "positive_rate": 0.5411700975081257
+      }
+    }
+  ]
+}

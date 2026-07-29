@@ -170,8 +170,12 @@ export default function DashboardPage() {
       if (alsoDeleteMl) {
         try {
           const { models } = await fetchStrategyModels(target.symbol);
-          for (const m of models) {
-            await deleteStrategyModel(m.id);
+          // Non-active versions first; active (last) triggers full engine wipe
+          const ordered = [...(models || [])].sort(
+            (a, b) => Number(Boolean(a.isActive)) - Number(Boolean(b.isActive)),
+          );
+          for (const m of ordered) {
+            await deleteStrategyModel(m.id).catch(() => undefined);
           }
           // Clear any leftover hot artifact if library was already empty
           await deleteMlModel(target.symbol).catch(() => undefined);

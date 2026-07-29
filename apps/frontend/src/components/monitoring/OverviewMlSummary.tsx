@@ -66,7 +66,9 @@ export default function OverviewMlSummary() {
       {error && <p className="text-xs text-red-400">{error}</p>}
 
       {!error && predictions.length === 0 && (
-        <p className="text-xs text-slate-500 py-4 text-center">No predictions yet</p>
+        <p className="text-xs text-slate-500 py-4 text-center">
+          No predictions yet — wait for a closed 15m candle (persisted)
+        </p>
       )}
 
       <div className="space-y-1.5">

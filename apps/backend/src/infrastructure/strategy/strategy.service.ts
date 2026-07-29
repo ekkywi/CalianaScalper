@@ -3,12 +3,14 @@
 
 import {
   BadRequestException,
+  ConflictException,
   forwardRef,
   Inject,
   Injectable,
   Logger,
   NotFoundException,
   OnModuleInit,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -230,17 +232,57 @@ export class StrategyService implements OnModuleInit {
 
   async deleteModel(id: string): Promise<void> {
     const m = await this.getModel(id);
-    const bindings = await this.bindingRepo.find({ where: { activeModelId: id } });
-    for (const b of bindings) {
-      b.activeModelId = null;
-      await this.bindingRepo.save(b);
+    const symbol = m.symbol.toUpperCase();
+    const siblings = await this.modelRepo.find({ where: { symbol } });
+    const binding = await this.getBinding(symbol);
+    const isActive = binding?.activeModelId === id;
+    const isLastForSymbol = siblings.length <= 1;
+
+    // Active version cannot be removed while other library versions remain
+    if (isActive && !isLastForSymbol) {
+      throw new ConflictException(
+        `Cannot delete active model “${m.name}” while other versions exist for ${symbol}. Activate another version first.`,
+      );
     }
+
     try {
-      await this.mlEngine.deleteLibraryModel(m.symbol, m.engineModelId);
+      if (isLastForSymbol) {
+        // Last (or only) version — wipe hot artifact + all versions on engine
+        await this.mlEngine.deleteModel(symbol);
+      } else {
+        await this.mlEngine.deleteLibraryModel(symbol, m.engineModelId);
+      }
     } catch (err: any) {
-      this.logger.warn(`[MODEL] Engine delete ${m.engineModelId}: ${err.message}`);
+      const status = err?.response?.status as number | undefined;
+      const detail =
+        err?.response?.data?.detail ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'ML engine delete failed';
+      if (status === 409) {
+        throw new ConflictException(String(detail));
+      }
+      if (status === 404) {
+        this.logger.warn(
+          `[MODEL] Engine already missing ${symbol}/${m.engineModelId} — removing registry row`,
+        );
+      } else {
+        throw new ServiceUnavailableException(
+          `Failed to delete model on ML engine: ${detail}`,
+        );
+      }
     }
-    await this.modelRepo.remove(m);
+
+    if (binding && binding.activeModelId === id) {
+      binding.activeModelId = null;
+      await this.bindingRepo.save(binding);
+    }
+
+    if (isLastForSymbol) {
+      await this.modelRepo.delete({ symbol });
+    } else {
+      await this.modelRepo.remove(m);
+    }
   }
 
   async syncModelsFromEngine(): Promise<number> {

@@ -17,7 +17,7 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { MlEngineService } from '../../infrastructure/ml/ml-engine.service';
-import { MlShadowService } from '../../infrastructure/ml/ml-shadow.service';
+import { MlPredictionLogService } from '../../infrastructure/ml/ml-prediction-log.service';
 import { PositionManagerService } from '../../infrastructure/risk/position-manager.service';
 import { StrategyService } from '../../infrastructure/strategy/strategy.service';
 import { BinanceExecutionService } from '../../infrastructure/exchange/binance-execution.service';
@@ -28,7 +28,7 @@ export class MlController {
 
   constructor(
     private readonly mlEngine: MlEngineService,
-    private readonly mlShadow: MlShadowService,
+    private readonly mlLog: MlPredictionLogService,
     @Inject(forwardRef(() => PositionManagerService))
     private readonly positionManager: PositionManagerService,
     @Inject(forwardRef(() => StrategyService))
@@ -212,15 +212,23 @@ export class MlController {
   async shadowPredictions(@Query('limit') limit?: string) {
     const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
     return {
-      predictions: this.mlShadow.list(n),
+      predictions: await this.mlLog.listShadow(n),
       disclaimer:
-        'Shadow log: BUY signals that would pass gates but were not executed (shadow mode) or were blocked.',
+        'Shadow log (persisted): BUY signals that would pass gates but were not executed (shadow mode). Survives Nest restarts.',
     };
   }
 
   @Get('predictions')
   async latestPredictions() {
-    return { predictions: this.mlEngine.getLatestPredictions() };
+    const fromDb = await this.mlLog.getLatestPerSymbol();
+    // Prefer DB; fall back to in-memory cache if DB empty (pre-persist era / no candles yet)
+    if (fromDb.length > 0) {
+      return { predictions: fromDb, source: 'database' };
+    }
+    return {
+      predictions: this.mlEngine.getLatestPredictions(),
+      source: 'memory',
+    };
   }
 
   @Get('drift-status')

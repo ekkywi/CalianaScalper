@@ -1,10 +1,13 @@
 # CalianaScalper — Phase Status Handoff
 
-Last updated: 2026-07-28
+Last updated: 2026-07-29
 Audience: human operator and future AI agents continuing this repo on another machine
 
 This file complements `PROJECT_STATE.md`.
 Use this document for the ML roadmap status across Phase 0 to Phase 4.
+Also use the playbook below when judging model quality after training.
+
+Prediction and shadow decision logs are persisted in Postgres (`ml_prediction_events`) and survive Nest restarts.
 
 ## Current Snapshot
 
@@ -135,6 +138,21 @@ Make the bot more selective and safer when using ML signals.
   - `mlRegimeGateEnabled`
 - BUY signals can be logged without execution
 - Shadow predictions available via API and panel in ML page
+- **Persisted:** ML decisions (predictions + shadow / blocked) are stored in Postgres table `ml_prediction_events` so Predictions and Shadow Log survive Nest restarts (30-day retention prune)
+
+#### B2. Hybrid holding exit (candle-close path)
+
+On every closed candle for an active symbol:
+
+1. **SL/TP first** via `checkPositions` (primary hard exit)
+2. **Always ML predict + persist** (flat or holding) so Predictions stay fresh
+3. **If OPEN (holding):**
+   - `BUY` → ignore (`blockedBy: holding`); no scale-in
+   - `HOLD` → keep position; SL/TP remain active
+   - `SELL` + confidence ≥ threshold → `flattenAndClose(..., CLOSED_BY_SIGNAL)`; if shadow mode → log would-close only (`blockedBy: shadow_mode`)
+4. **If flat:** existing entry path (regime / confidence / pair / shadow gates on BUY)
+
+Out of scope for this step: trailing stop, breakeven, time-stop.
 
 #### C. Model lifecycle safety and UX fixes
 
@@ -161,8 +179,9 @@ Make the bot more selective and safer when using ML signals.
 - `services/ml-engine/label_config.py`
 - `apps/backend/src/application/orchestrator/market.orchestrator.ts`
 - `apps/backend/src/application/ml/ml.controller.ts`
+- `apps/backend/src/infrastructure/ml/ml-prediction-log.service.ts`
+- `apps/backend/src/infrastructure/database/ml-prediction-event.entity.ts`
 - `apps/backend/src/infrastructure/ml/ml-engine.service.ts`
-- `apps/backend/src/infrastructure/ml/ml-shadow.service.ts`
 - `apps/backend/src/infrastructure/exchange/binance-rest.service.ts`
 - `apps/backend/src/infrastructure/exchange/binance-ws.service.ts`
 - `apps/frontend/src/components/monitoring/MlShadowLogPanel.tsx`
@@ -248,6 +267,43 @@ Mostly deferred.
 
 ---
 
+## How to judge models after training
+
+Training metrics are a **first filter**, not proof of profit. Prefer this order:
+
+1. **Preview label** — only train when the preview shows the model is trainable (enough positive / resolved rows).
+2. After status `ready`, read **Prec BUY** first (false BUY is expensive for long-only).
+3. Press **Eval** — compare ML holdout vs EMA baseline (win rate / avg return under simulated SL/TP).
+4. Test in **paper** or **Shadow mode** before trusting validation numbers alone.
+5. Do not treat Val accuracy as the only score. Call a model “good” only when Prec BUY, Eval, and paper/shadow do not conflict.
+
+### Why this order
+
+- Labels are `TP hit before SL` → **Prec BUY** is closest to “BUY that was right”.
+- Val accuracy is easy to misread when classes are imbalanced.
+- UI already exposes these signals on **ML Models** (`/dashboard/ml-models`):
+  - `Val acc`, `Prec BUY`, `Recall BUY`, `F1 BUY`
+  - **Eval** (holdout SL/TP sim vs EMA — not live PnL)
+  - paper/live ML trade stats / Shadow Log on separate menus
+- Phase 2 regime gate + shadow mode should be used to test signal selectivity without placing orders.
+
+### Operator playbook
+
+```text
+Preview label → Train → check Prec BUY + Eval → Shadow ON (paper) → review shadow log / paper ML stats → then Shadow OFF
+```
+
+### Practical rules
+
+- Prec BUY weak + Eval loses to EMA → do not promote; adjust Risk TP/horizon or retrain.
+- Prec BUY looks fine but paper/shadow is poor → model is “smart on labels”, not on execution; hold.
+- High Val accuracy with low Prec BUY → watch for false BUY.
+- Metrics UI may show `n/a` if training failed (`error`) or the model never persisted metrics — that is not “missing UI”.
+
+UI disclaimer already states validation metrics are **not live PnL**.
+
+---
+
 ## Recommended Next Steps
 
 If continuing on another machine, the most logical order is:
@@ -271,6 +327,7 @@ If continuing on another machine, the most logical order is:
 - `GET /api/ml/models`
 - `GET /api/ml/label-preview/:symbol`
 - `GET /api/ml/shadow-predictions`
+- `GET /api/ml/predictions` (from DB after candle closes; survives restart)
 - Risk page shows:
   - regime gate toggle
   - shadow mode toggle
@@ -278,6 +335,8 @@ If continuing on another machine, the most logical order is:
   - prediction regime
   - shadow log panel
   - preview label button
+  - Val acc / Prec BUY / Recall BUY / Eval on ready models
+- After training, follow **How to judge models after training** (Prec BUY → Eval → paper/shadow)
 
 ---
 

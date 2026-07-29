@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2, Play } from 'lucide-react';
 import { formatUSD, getChangeColor } from '@/lib/utils';
 import {
   emergencyStopAll,
   fetchAccountBalance,
   fetchPositions,
+  resumeTrading,
   type AccountBalanceResponse,
 } from '@/services/api-extended';
 import { socket } from '@/services/socket';
@@ -28,12 +29,12 @@ function safeMoney(n: unknown): number | null {
 }
 
 export default function CriticalStatusStrip() {
-  const { isEmergencyStopped, setEmergencyStopped, setTradingHalted, addAlert, addLog } =
-    useAppStore();
+  const { tradingHalted, haltReason, syncTradingHalt, addAlert, addLog } = useAppStore();
   const [positions, setPositions] = useState<PositionRow[]>([]);
   const [balance, setBalance] = useState<AccountBalanceResponse | null>(null);
   const [balanceError, setBalanceError] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [resumeConfirmOpen, setResumeConfirmOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -100,9 +101,8 @@ export default function CriticalStatusStrip() {
     setLoading(true);
     setError(null);
     try {
-      await emergencyStopAll();
-      setEmergencyStopped(true);
-      setTradingHalted(true);
+      const res = await emergencyStopAll();
+      syncTradingHalt(true, res?.haltReason || 'EMERGENCY_STOP');
       setConfirmOpen(false);
       addAlert({
         id: `emergency-${Date.now()}`,
@@ -131,6 +131,37 @@ export default function CriticalStatusStrip() {
         timestamp: Math.floor(Date.now() / 1000),
         source: 'circuit-breaker',
       });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResume = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await resumeTrading();
+      syncTradingHalt(false, null);
+      setResumeConfirmOpen(false);
+      addAlert({
+        id: `resume-${Date.now()}`,
+        type: 'system',
+        title: 'Trading Resumed',
+        message: 'Trading has been resumed via backend.',
+        severity: 'info',
+        timestamp: Math.floor(Date.now() / 1000),
+        read: false,
+      });
+      addLog({
+        id: `log-${Date.now()}`,
+        level: 'INFO',
+        message: 'Trading resumed by user — backend confirmed',
+        timestamp: Math.floor(Date.now() / 1000),
+        source: 'circuit-breaker',
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to resume trading';
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -172,27 +203,45 @@ export default function CriticalStatusStrip() {
                     : '—'}
               </p>
             </div>
-            {isEmergencyStopped && (
+            {tradingHalted && (
               <div className="px-2 py-1 rounded bg-red-500/10 border border-red-500/30">
-                <p className="text-[10px] font-medium text-red-400">TRADING HALTED</p>
+                <p className="text-[10px] font-medium text-red-400">
+                  HALTED{haltReason ? ` · ${haltReason}` : ''}
+                </p>
               </div>
             )}
             {error && <p className="text-[10px] text-red-400 max-w-[200px] truncate">{error}</p>}
           </div>
 
-          <button
-            type="button"
-            onClick={() => setConfirmOpen(true)}
-            disabled={isEmergencyStopped || loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold rounded-lg transition-colors"
-          >
-            {loading ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <AlertTriangle className="w-3.5 h-3.5" />
-            )}
-            Emergency Stop
-          </button>
+          {tradingHalted ? (
+            <button
+              type="button"
+              onClick={() => setResumeConfirmOpen(true)}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold rounded-lg transition-colors"
+            >
+              {loading ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Play className="w-3.5 h-3.5" />
+              )}
+              Resume
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmOpen(true)}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold rounded-lg transition-colors"
+            >
+              {loading ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <AlertTriangle className="w-3.5 h-3.5" />
+              )}
+              Emergency Stop
+            </button>
+          )}
         </div>
       </div>
 
@@ -206,6 +255,19 @@ export default function CriticalStatusStrip() {
         onConfirm={handleEmergencyStop}
         onCancel={() => {
           if (!loading) setConfirmOpen(false);
+        }}
+      />
+
+      <ConfirmDialog
+        open={resumeConfirmOpen}
+        title="Resume Trading?"
+        description="Trading will be re-enabled on the backend. Ensure risk limits and market conditions are acceptable before continuing."
+        confirmLabel="Resume Trading"
+        variant="default"
+        loading={loading}
+        onConfirm={handleResume}
+        onCancel={() => {
+          if (!loading) setResumeConfirmOpen(false);
         }}
       />
     </>

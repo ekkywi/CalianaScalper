@@ -64,6 +64,7 @@ export class SystemController {
       exchange,
       uptime: Math.floor((Date.now() - this.startedAt) / 1000),
       tradingHalted: this.positionManager.isTradingHalted(),
+      tradingHaltReason: this.positionManager.getHaltReason(),
       tradingMode: modeStatus.mode,
       liveAllowed: modeStatus.liveAllowed,
       openPositions: this.positionManager.getOpenPositions().length,

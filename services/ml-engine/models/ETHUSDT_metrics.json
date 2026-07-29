@@ -1,0 +1,86 @@
+{
+  "accuracy": 0.7405405405405405,
+  "n_train": 1476,
+  "n_val": 370,
+  "sub_models": {
+    "xgboost": {
+      "accuracy": 0.7243243243243244,
+      "precision_buy": 0.8846153846153846,
+      "recall_buy": 0.7022900763358778,
+      "f1_buy": 0.7829787234042553,
+      "n_val": 370,
+      "val_tp": 184,
+      "val_fp": 24,
+      "val_fn": 78,
+      "val_tn": 84,
+      "val_predicted_buy": 208,
+      "val_actual_buy": 262,
+      "n_train": 1476,
+      "scale_pos_weight": 0.8478478478478478
+    },
+    "lightgbm": {
+      "accuracy": 0.7027027027027027,
+      "precision_buy": 0.8584905660377359,
+      "recall_buy": 0.6946564885496184,
+      "f1_buy": 0.7679324894514769,
+      "n_val": 370,
+      "val_tp": 182,
+      "val_fp": 30,
+      "val_fn": 80,
+      "val_tn": 78,
+      "val_predicted_buy": 212,
+      "val_actual_buy": 262,
+      "n_train": 1476,
+      "scale_pos_weight": 0.8478478478478478
+    },
+    "logreg": {
+      "accuracy": 0.7675675675675676,
+      "precision_buy": 0.8492063492063492,
+      "recall_buy": 0.816793893129771,
+      "f1_buy": 0.8326848249027237,
+      "n_val": 370,
+      "val_tp": 214,
+      "val_fp": 38,
+      "val_fn": 48,
+      "val_tn": 70,
+      "val_predicted_buy": 252,
+      "val_actual_buy": 262,
+      "n_train": 1476
+    }
+  },
+  "ensemble_members": [
+    "xgboost",
+    "lightgbm",
+    "logreg"
+  ],
+  "ensemble_weights": {
+    "xgboost": 0.4,
+    "lightgbm": 0.4,
+    "logreg": 0.2
+  },
+  "precision_buy": 0.8807339449541285,
+  "recall_buy": 0.732824427480916,
+  "f1_buy": 0.8000000000000002,
+  "val_tp": 192,
+  "val_fp": 26,
+  "val_fn": 70,
+  "val_tn": 82,
+  "val_predicted_buy": 218,
+  "val_actual_buy": 262,
+  "algorithm": "ensemble",
+  "algorithm_name": "Ensemble (XGB+LGBM+LR)",
+  "trained_at": 1785307940492,
+  "label_config": {
+    "stop_loss_percent": 0.005,
+    "take_profit_percent": 0.01,
+    "max_horizon_candles": 96,
+    "round_trip_fee_percent": 0.002,
+    "label_mode": "tp_before_sl"
+  },
+  "model_id": "2ff6116e5f934e82",
+  "name": "ETHSL0.5/TP1/HR96",
+  "n_labeled": 1846,
+  "n_positive": 999,
+  "n_negative": 847,
+  "positive_rate": 0.5411700975081257
+}

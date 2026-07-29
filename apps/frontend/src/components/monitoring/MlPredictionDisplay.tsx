@@ -79,7 +79,7 @@ export default function MlPredictionDisplay() {
       {error && <p className="text-xs text-red-400 mb-3">{error}</p>}
       {!refreshing && predictions.length === 0 && !error && (
         <p className="text-xs text-slate-500 py-6 text-center">
-          No predictions yet — wait for a closed 15m candle
+          No predictions yet — wait for a closed 15m candle (persisted across restarts)
         </p>
       )}
 
