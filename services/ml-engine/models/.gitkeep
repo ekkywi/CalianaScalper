@@ -1,0 +1,2 @@
+# Keeps the models/ directory in git. Trained artifacts are gitignored.
+# Files appear here after ML training (e.g. BTCUSDT_artifact.pkl).
