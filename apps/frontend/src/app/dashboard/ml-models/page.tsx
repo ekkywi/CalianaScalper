@@ -17,28 +17,17 @@ import {
   syncStrategyModels,
   type StrategyModelRow,
   type StrategyPairStatus,
+  type StrategyModelLastEval,
 } from '@/services/api-strategy';
 import { fetchMlEval } from '@/services/api-extended';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import PromptDialog from '@/components/ui/PromptDialog';
 import { useToast } from '@/components/ui/toast';
+import ModelQualityJudgePanel from '@/components/monitoring/ModelQualityJudgePanel';
+import type { ModelQualityInput } from '@/lib/model-quality-judge';
 
-type EvalBacktest = {
-  n_trades?: number;
-  win_rate?: number | null;
-  avg_return_pct?: number | null;
-  total_return_pct?: number | null;
-};
-
-type EvalSummary = {
-  symbol: string;
-  disclaimer?: string;
-  backtest_ml?: EvalBacktest | null;
-  backtest_baseline_ema?: EvalBacktest | null;
-  classifier_holdout?: {
-    precision_buy?: number | null;
-    accuracy?: number | null;
-  } | null;
+type EvalSummary = StrategyModelLastEval & {
+  symbol?: string;
 };
 
 function pct(v: number) {
@@ -89,8 +78,27 @@ export default function MlModelsPage() {
     null,
   );
   const [creatingProfile, setCreatingProfile] = useState(false);
-  const [evalBySymbol, setEvalBySymbol] = useState<Record<string, EvalSummary>>({});
+  const [evalByModelId, setEvalByModelId] = useState<Record<string, EvalSummary>>(
+    {},
+  );
   const [evalLoading, setEvalLoading] = useState<string | null>(null);
+
+  const hydrateEvalFromModels = useCallback((list: StrategyModelRow[]) => {
+    setEvalByModelId((prev) => {
+      const next: Record<string, EvalSummary> = { ...prev };
+      for (const m of list) {
+        if (m.lastEval && typeof m.lastEval === 'object') {
+          next[m.id] = m.lastEval as EvalSummary;
+        }
+      }
+      // Drop evals for models no longer in library
+      const ids = new Set(list.map((m) => m.id));
+      for (const id of Object.keys(next)) {
+        if (!ids.has(id)) delete next[id];
+      }
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -101,8 +109,10 @@ export default function MlModelsPage() {
         fetchStrategyModels(),
         fetchStrategyPairs(),
       ]);
-      setModels(m.models || []);
+      const list = m.models || [];
+      setModels(list);
       setPairs(p.pairs || []);
+      hydrateEvalFromModels(list);
     } catch (err: any) {
       const msg = err.message || 'Failed to load models';
       setError(msg);
@@ -110,7 +120,7 @@ export default function MlModelsPage() {
     } finally {
       setLoading(false);
     }
-  }, [toastError]);
+  }, [toastError, hydrateEvalFromModels]);
 
   useEffect(() => {
     load();
@@ -120,14 +130,24 @@ export default function MlModelsPage() {
 
   const pairFor = (symbol: string) => pairs.find((x) => x.symbol === symbol);
 
-  const runEval = async (symbol: string) => {
-    setEvalLoading(symbol);
+  const runEval = async (model: StrategyModelRow) => {
+    setEvalLoading(model.id);
     try {
-      const data = (await fetchMlEval(symbol)) as EvalSummary;
-      setEvalBySymbol((prev) => ({ ...prev, [symbol]: data }));
-      success('Holdout eval done', `${symbol} — not live PnL`);
+      const data = (await fetchMlEval(model.symbol, model.id)) as EvalSummary;
+      setEvalByModelId((prev) => ({ ...prev, [model.id]: data }));
+      setModels((prev) =>
+        prev.map((row) =>
+          row.id === model.id ? { ...row, lastEval: data } : row,
+        ),
+      );
+      success(
+        'Holdout eval saved',
+        data.persistedTo
+          ? `${model.symbol} — stored on model (survives refresh)`
+          : `${model.symbol} — not live PnL (could not bind to registry row)`,
+      );
     } catch (err: any) {
-      toastError('Eval failed', err.message || symbol);
+      toastError('Eval failed', err.message || model.symbol);
     } finally {
       setEvalLoading(null);
     }
@@ -174,8 +194,8 @@ export default function MlModelsPage() {
           <h1 className="text-lg font-semibold text-white">ML Models</h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Trained model library — activate without losing other versions. BUY requires
-            an aligned trading profile. Use Eval for holdout SL/TP simulation (not live
-            PnL).
+            an aligned trading profile. Use Eval then read Quality judge (Prec BUY → EMA
+            baseline — not live PnL).
           </p>
         </div>
         <button
@@ -213,8 +233,49 @@ export default function MlModelsPage() {
             const f1Buy = metricNum(m.metrics, 'f1_buy');
             const nTrain = metricNum(m.metrics, 'n_train');
             const nVal = metricNum(m.metrics, 'n_val');
-            const evalData = evalBySymbol[m.symbol];
-            const evalBusy = evalLoading === m.symbol;
+            const evalData = evalByModelId[m.id] ?? (m.lastEval as EvalSummary | null) ?? undefined;
+            const evalBusy = evalLoading === m.id;
+            const judgeInput: ModelQualityInput = {
+              precisionBuy,
+              recallBuy,
+              f1Buy,
+              accuracy,
+              nTrain,
+              nVal,
+              hasCompatibleProfile: Boolean(m.hasCompatibleProfile),
+              pairBlockBuy: Boolean(m.isActive && pair?.blockBuy),
+              pairMessage: pair?.message ?? null,
+              eval: evalData
+                ? {
+                    mlTrades: Number(evalData.backtest_ml?.n_trades) || 0,
+                    mlWinRate:
+                      evalData.backtest_ml?.win_rate != null &&
+                      Number.isFinite(Number(evalData.backtest_ml.win_rate))
+                        ? Number(evalData.backtest_ml.win_rate)
+                        : null,
+                    mlAvgReturn:
+                      evalData.backtest_ml?.avg_return_pct != null &&
+                      Number.isFinite(Number(evalData.backtest_ml.avg_return_pct))
+                        ? Number(evalData.backtest_ml.avg_return_pct)
+                        : null,
+                    emaTrades: Number(evalData.backtest_baseline_ema?.n_trades) || 0,
+                    emaWinRate:
+                      evalData.backtest_baseline_ema?.win_rate != null &&
+                      Number.isFinite(
+                        Number(evalData.backtest_baseline_ema.win_rate),
+                      )
+                        ? Number(evalData.backtest_baseline_ema.win_rate)
+                        : null,
+                    emaAvgReturn:
+                      evalData.backtest_baseline_ema?.avg_return_pct != null &&
+                      Number.isFinite(
+                        Number(evalData.backtest_baseline_ema.avg_return_pct),
+                      )
+                        ? Number(evalData.backtest_baseline_ema.avg_return_pct)
+                        : null,
+                  }
+                : null,
+            };
             return (
               <div
                 key={m.id}
@@ -299,9 +360,17 @@ export default function MlModelsPage() {
 
                 {evalData && (
                   <div className="rounded-lg border border-slate-700/60 bg-slate-800/40 p-2.5 space-y-1.5">
-                    <p className="text-[9px] uppercase tracking-wider text-slate-500">
-                      Holdout eval (SL/TP sim — not live PnL)
-                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[9px] uppercase tracking-wider text-slate-500">
+                        Holdout eval (SL/TP sim — not live PnL)
+                      </p>
+                      {typeof evalData.evaluatedAt === 'number' &&
+                        Number.isFinite(evalData.evaluatedAt) && (
+                          <span className="text-[9px] text-slate-600 font-mono">
+                            saved {timeAgo(Number(evalData.evaluatedAt))}
+                          </span>
+                        )}
+                    </div>
                     <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
                       <div>
                         <p className="text-slate-500">ML</p>
@@ -323,6 +392,8 @@ export default function MlModelsPage() {
                   </div>
                 )}
 
+                <ModelQualityJudgePanel input={judgeInput} />
+
                 <div className="flex flex-wrap gap-2">
                   {!m.isActive && (
                     <button
@@ -343,17 +414,17 @@ export default function MlModelsPage() {
                   )}
                   <button
                     type="button"
-                    onClick={() => runEval(m.symbol)}
+                    onClick={() => runEval(m)}
                     disabled={evalBusy || Boolean(evalLoading)}
                     title={
                       m.isActive
-                        ? 'Holdout SL/TP simulation vs EMA baseline'
-                        : 'Runs against currently loaded engine model for this symbol'
+                        ? 'Holdout SL/TP simulation vs EMA — result saved on this model'
+                        : 'Runs against currently loaded engine model; result saved on this registry row'
                     }
                     className="px-2.5 py-1.5 rounded-lg bg-violet-600/80 hover:bg-violet-600 disabled:opacity-40 text-[10px] font-medium text-white inline-flex items-center gap-1.5"
                   >
                     {evalBusy && <Loader2 className="w-3 h-3 animate-spin" />}
-                    {evalBusy ? 'Eval…' : 'Eval'}
+                    {evalBusy ? 'Eval…' : evalData ? 'Re-run Eval' : 'Eval + Judge'}
                   </button>
                   <button
                     type="button"

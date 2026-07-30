@@ -42,6 +42,30 @@ export type TradingProfileRow = {
   hasCompatibleModel?: boolean;
 };
 
+export type StrategyModelLastEval = {
+  symbol?: string;
+  evaluatedAt?: number;
+  disclaimer?: string;
+  persistedTo?: string | null;
+  backtest_ml?: {
+    n_trades?: number;
+    win_rate?: number | null;
+    avg_return_pct?: number | null;
+    total_return_pct?: number | null;
+  } | null;
+  backtest_baseline_ema?: {
+    n_trades?: number;
+    win_rate?: number | null;
+    avg_return_pct?: number | null;
+    total_return_pct?: number | null;
+  } | null;
+  classifier_holdout?: {
+    precision_buy?: number | null;
+    accuracy?: number | null;
+  } | null;
+  [key: string]: unknown;
+};
+
 export type StrategyModelRow = {
   id: string;
   symbol: string;
@@ -54,6 +78,7 @@ export type StrategyModelRow = {
     max_horizon_candles: number;
   };
   metrics?: Record<string, unknown> | null;
+  lastEval?: StrategyModelLastEval | null;
   trainedAt: number;
   isActive?: boolean;
   compatibleProfileCount?: number;

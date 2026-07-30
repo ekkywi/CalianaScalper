@@ -209,8 +209,13 @@ export async function fetchMlLabelPreview(symbol: string) {
   return getJson(`/ml/label-preview/${encodeURIComponent(symbol)}`);
 }
 
-export async function fetchMlEval(symbol: string) {
-  return getJson(`/ml/eval/${encodeURIComponent(symbol)}`);
+export async function fetchMlEval(symbol: string, modelId?: string) {
+  const query = new URLSearchParams();
+  if (modelId) query.set('modelId', modelId);
+  const qs = query.toString();
+  return getJson(
+    `/ml/eval/${encodeURIComponent(symbol)}${qs ? `?${qs}` : ''}`,
+  );
 }
 
 export type MlTradeStats = {

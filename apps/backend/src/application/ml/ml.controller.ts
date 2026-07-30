@@ -179,7 +179,10 @@ export class MlController {
   }
 
   @Get('eval/:symbol')
-  async evaluateModel(@Param('symbol') symbol: string) {
+  async evaluateModel(
+    @Param('symbol') symbol: string,
+    @Query('modelId') modelId?: string,
+  ) {
     const risk = this.positionManager.getRiskConfig();
     const exec = await this.strategy.getActiveExecution(symbol);
     const labelConfig = exec
@@ -199,7 +202,25 @@ export class MlController {
         `Eval failed for ${symbol} (train model first or ML engine unreachable)`,
       );
     }
-    return result;
+
+    const targetId = await this.strategy.resolveEvalTargetModelId(
+      symbol,
+      modelId,
+    );
+    let persistedTo: string | null = null;
+    if (targetId) {
+      const saved = await this.strategy.saveModelLastEval(targetId, result);
+      persistedTo = saved.id;
+    }
+
+    return {
+      ...result,
+      persistedTo,
+      evaluatedAt: Date.now(),
+      disclaimer:
+        result.disclaimer ||
+        'Holdout SL/TP simulation vs EMA — not live PnL. Last eval is stored on the model registry.',
+    };
   }
 
   @Get('trade-stats')

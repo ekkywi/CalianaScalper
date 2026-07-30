@@ -230,6 +230,38 @@ export class StrategyService implements OnModuleInit {
     return this.modelRepo.save(row);
   }
 
+  async saveModelLastEval(
+    modelId: string,
+    evalPayload: Record<string, unknown>,
+  ): Promise<MlModelRegistryEntity> {
+    const row = await this.getModel(modelId);
+    row.lastEval = {
+      ...evalPayload,
+      evaluatedAt: Date.now(),
+      modelId: row.id,
+      engineModelId: row.engineModelId,
+      symbol: row.symbol,
+    };
+    return this.modelRepo.save(row);
+  }
+
+  async resolveEvalTargetModelId(
+    symbol: string,
+    preferredModelId?: string,
+  ): Promise<string | null> {
+    const sym = symbol.toUpperCase();
+    if (preferredModelId) {
+      const preferred = await this.modelRepo.findOne({
+        where: { id: preferredModelId },
+      });
+      if (preferred && preferred.symbol === sym) {
+        return preferred.id;
+      }
+    }
+    const binding = await this.getBinding(sym);
+    return binding?.activeModelId ?? null;
+  }
+
   async deleteModel(id: string): Promise<void> {
     const m = await this.getModel(id);
     const symbol = m.symbol.toUpperCase();

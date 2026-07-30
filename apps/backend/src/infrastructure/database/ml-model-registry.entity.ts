@@ -40,6 +40,10 @@ export class MlModelRegistryEntity {
   @Column({ type: 'jsonb', nullable: true })
   metrics: Record<string, unknown> | null;
 
+  /** Last holdout Eval snapshot (ML vs EMA) — survives refresh; cleared with model delete */
+  @Column({ type: 'jsonb', nullable: true })
+  lastEval: Record<string, unknown> | null;
+
   @Column({ type: 'bigint', default: 0 })
   trainedAt: number;
 
