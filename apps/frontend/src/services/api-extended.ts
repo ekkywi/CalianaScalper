@@ -239,6 +239,40 @@ export async function fetchMlShadowPredictions(limit = 50) {
   return getJson(`/ml/shadow-predictions?limit=${limit}`);
 }
 
+export type MlDecisionEvent = {
+  id: string;
+  symbol: string;
+  signal: string;
+  confidence: number;
+  algorithm: string | null;
+  regime: string | null;
+  regimeReason: string | null;
+  effectiveMinConfidence: number | null;
+  blockedBy: string | null;
+  wouldExecute: boolean;
+  executed: boolean;
+  tradingMode: string;
+  candleCloseTime: number;
+  createdAt: number;
+};
+
+export async function fetchMlPredictionEvents(params?: {
+  symbol?: string;
+  blockedBy?: string;
+  executed?: 'true' | 'false' | '';
+  limit?: number;
+}): Promise<{ events: MlDecisionEvent[]; disclaimer?: string }> {
+  const query = new URLSearchParams();
+  if (params?.symbol) query.set('symbol', params.symbol);
+  if (params?.blockedBy) query.set('blockedBy', params.blockedBy);
+  if (params?.executed === 'true' || params?.executed === 'false') {
+    query.set('executed', params.executed);
+  }
+  if (params?.limit) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  return getJson(`/ml/prediction-events${qs ? `?${qs}` : ''}`);
+}
+
 export async function fetchMlHealth() {
   return getJson('/ml/health');
 }

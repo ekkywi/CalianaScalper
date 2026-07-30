@@ -218,6 +218,32 @@ export class MlController {
     };
   }
 
+  @Get('prediction-events')
+  async predictionEvents(
+    @Query('symbol') symbol?: string,
+    @Query('blockedBy') blockedBy?: string,
+    @Query('executed') executed?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
+    let executedFilter: boolean | undefined;
+    if (executed === 'true' || executed === '1') executedFilter = true;
+    else if (executed === 'false' || executed === '0') executedFilter = false;
+
+    const events = await this.mlLog.listEvents({
+      symbol,
+      blockedBy,
+      executed: executedFilter,
+      limit: n,
+    });
+    return {
+      events,
+      source: 'database',
+      disclaimer:
+        'Decision log from ml_prediction_events — every candle close decision with blockedBy / executed. Retention ~30 days.',
+    };
+  }
+
   @Get('predictions')
   async latestPredictions() {
     const fromDb = await this.mlLog.getLatestPerSymbol();

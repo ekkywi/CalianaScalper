@@ -21,6 +21,10 @@ export default function MlPredictionsPage() {
         <Link href="/dashboard/ml-models" className="text-sky-400 hover:text-sky-300 underline">
           ML Models
         </Link>
+        . Full decision history (blocked / executed):{' '}
+        <Link href="/dashboard/ml-decisions" className="text-sky-400 hover:text-sky-300 underline">
+          ML Decision Log
+        </Link>
         . Would-be trades (shadow) live under{' '}
         <Link href="/dashboard/ml-shadow" className="text-sky-400 hover:text-sky-300 underline">
           ML Shadow Log

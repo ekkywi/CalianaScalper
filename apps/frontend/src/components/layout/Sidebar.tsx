@@ -10,7 +10,7 @@ import ConnectionStatus from '@/components/layout/ConnectionStatus';
 import {
   Activity, BarChart3, LayoutDashboard,
   Brain, Bell, Terminal, Send, Shield, SlidersHorizontal, GraduationCap,
-  TrendingUp, Eye,
+  TrendingUp, Eye, ListFilter,
 } from 'lucide-react';
 
 const NAV_SECTIONS = [
@@ -35,6 +35,7 @@ const NAV_SECTIONS = [
       { href: '/dashboard/ml-training', label: 'ML Training', icon: GraduationCap },
       { href: '/dashboard/ml-models', label: 'ML Models', icon: Brain },
       { href: '/dashboard/ml-predictions', label: 'ML Predictions', icon: TrendingUp },
+      { href: '/dashboard/ml-decisions', label: 'ML Decision Log', icon: ListFilter },
       { href: '/dashboard/ml-shadow', label: 'ML Shadow Log', icon: Eye },
     ],
   },

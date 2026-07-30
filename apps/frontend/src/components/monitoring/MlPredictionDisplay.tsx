@@ -4,6 +4,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Brain, TrendingUp, TrendingDown, Minus, RefreshCw } from 'lucide-react';
 import { fetchMlPredictions } from '@/services/api-extended';
 
@@ -17,6 +18,9 @@ type Prediction = {
     regime_reason?: string;
     regime_confidence_bump?: number;
     algorithm?: string;
+    blocked_by?: string | null;
+    executed?: boolean;
+    would_execute?: boolean;
   };
 };
 
@@ -95,41 +99,44 @@ export default function MlPredictionDisplay() {
 
           return (
             <div key={pred.symbol} className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-semibold text-white">
-                  {pred.symbol.replace('USDT', '')}
-                </span>
-                <span
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${s.bg} ${s.text}`}
+              <div className="flex items-center justify-between gap-2 mb-2.5">
+                <Link
+                  href={`/dashboard/${encodeURIComponent(pred.symbol)}`}
+                  className="text-sm font-semibold text-white hover:text-sky-400"
                 >
-                  <Icon className="w-3 h-3" />
-                  {s.label}
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-[10px]">
-                <div>
-                  <span className="text-slate-500">Confidence</span>
-                  <div className="mt-1">
-                    <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${
-                          pred.confidence >= 0.7
-                            ? 'bg-emerald-500'
-                            : pred.confidence >= 0.5
-                              ? 'bg-amber-500'
-                              : 'bg-red-500'
-                        }`}
-                        style={{ width: `${confidencePercent}%` }}
-                      />
-                    </div>
-                    <p className="text-slate-300 font-mono mt-0.5">{confidencePercent}%</p>
-                  </div>
-                </div>
-                <div>
-                  <span className="text-slate-500">Updated</span>
-                  <p className="text-slate-300 font-mono mt-1">{ageMin}m ago</p>
+                  {pred.symbol.replace('USDT', '')}
+                  <span className="text-slate-500 font-normal">/USDT</span>
+                </Link>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[10px] text-slate-500 font-mono tabular-nums">
+                    {ageMin}m ago
+                  </span>
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${s.bg} ${s.text}`}
+                  >
+                    <Icon className="w-3 h-3" />
+                    {s.label}
+                  </span>
                 </div>
               </div>
+
+              <div className="flex items-center justify-between text-[10px] mb-1">
+                <span className="text-slate-500">Confidence</span>
+                <span className="text-slate-300 font-mono tabular-nums">{confidencePercent}%</span>
+              </div>
+              <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-[width] ${
+                    pred.confidence >= 0.7
+                      ? 'bg-emerald-500'
+                      : pred.confidence >= 0.5
+                        ? 'bg-amber-500'
+                        : 'bg-red-500'
+                  }`}
+                  style={{ width: `${confidencePercent}%` }}
+                />
+              </div>
+
               {pred.raw?.regime && (
                 <p className="text-[10px] text-slate-500 mt-2 font-mono">
                   regime: {pred.raw.regime}
@@ -139,10 +146,30 @@ export default function MlPredictionDisplay() {
                   {pred.raw.regime_reason ? ` — ${pred.raw.regime_reason}` : ''}
                 </p>
               )}
+              {pred.raw?.blocked_by != null && String(pred.raw.blocked_by) !== '' && (
+                <p className="text-[10px] text-red-400/90 mt-1.5">
+                  blocked: {String(pred.raw.blocked_by)}
+                </p>
+              )}
+              {(!pred.raw?.blocked_by || String(pred.raw.blocked_by) === '') &&
+                pred.raw?.executed === true && (
+                  <p className="text-[10px] text-emerald-400/80 mt-1.5">executed</p>
+                )}
+              {(!pred.raw?.blocked_by || String(pred.raw.blocked_by) === '') &&
+                pred.raw?.executed !== true &&
+                pred.raw?.would_execute === true && (
+                  <p className="text-[10px] text-amber-400/80 mt-1.5">would execute</p>
+                )}
             </div>
           );
         })}
       </div>
+
+      <p className="text-[10px] text-slate-500 mt-4">
+        <Link href="/dashboard/ml-decisions" className="text-sky-400 hover:text-sky-300">
+          Open full decision log →
+        </Link>
+      </p>
     </div>
   );
 }

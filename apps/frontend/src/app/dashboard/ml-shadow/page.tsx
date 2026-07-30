@@ -28,6 +28,13 @@ export default function MlShadowPage() {
         >
           ML Predictions
         </Link>
+        . All blocked reasons:{' '}
+        <Link
+          href="/dashboard/ml-decisions"
+          className="text-sky-400 hover:text-sky-300 underline"
+        >
+          ML Decision Log
+        </Link>
         .
       </p>
     </div>

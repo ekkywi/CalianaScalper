@@ -14,6 +14,16 @@ export type MlBlockedBy =
   | 'confidence'
   | 'drift'
   | 'holding'
+  | 'trading_halted'
+  | 'max_positions'
+  | 'max_trades'
+  | 'daily_loss'
+  | 'drawdown'
+  | 'insufficient_balance'
+  | 'sizing'
+  | 'exchange'
+  | 'ledger'
+  | 'risk'
   | null;
 
 export type MlPredictionLogInput = {
@@ -110,6 +120,75 @@ export class MlPredictionLogService {
       order: { candleCloseTime: 'DESC' },
       take: n,
     });
+  }
+
+  async listEvents(params?: {
+    symbol?: string;
+    blockedBy?: string;
+    executed?: boolean;
+    limit?: number;
+  }): Promise<
+    Array<{
+      id: string;
+      symbol: string;
+      signal: string;
+      confidence: number;
+      algorithm: string | null;
+      regime: string | null;
+      regimeReason: string | null;
+      effectiveMinConfidence: number | null;
+      blockedBy: string | null;
+      wouldExecute: boolean;
+      executed: boolean;
+      tradingMode: string;
+      candleCloseTime: number;
+      createdAt: number;
+    }>
+  > {
+    const n = Math.min(Math.max(params?.limit ?? 50, 1), 200);
+    const qb = this.repo
+      .createQueryBuilder('e')
+      .orderBy('e.candleCloseTime', 'DESC')
+      .take(n);
+
+    if (params?.symbol?.trim()) {
+      qb.andWhere('e.symbol = :symbol', {
+        symbol: params.symbol.trim().toUpperCase(),
+      });
+    }
+    if (params?.blockedBy === 'none') {
+      qb.andWhere('e.blockedBy IS NULL');
+    } else if (params?.blockedBy === 'any') {
+      qb.andWhere('e.blockedBy IS NOT NULL');
+    } else if (params?.blockedBy) {
+      qb.andWhere('e.blockedBy = :blockedBy', { blockedBy: params.blockedBy });
+    }
+    if (params?.executed === true) {
+      qb.andWhere('e.executed = true');
+    } else if (params?.executed === false) {
+      qb.andWhere('e.executed = false');
+    }
+
+    const rows = await qb.getMany();
+    return rows.map((r) => ({
+      id: r.id,
+      symbol: r.symbol,
+      signal: r.signal,
+      confidence: Number(r.confidence),
+      algorithm: r.algorithm,
+      regime: r.regime,
+      regimeReason: r.regimeReason,
+      effectiveMinConfidence:
+        r.effectiveMinConfidence != null
+          ? Number(r.effectiveMinConfidence)
+          : null,
+      blockedBy: r.blockedBy,
+      wouldExecute: Boolean(r.wouldExecute),
+      executed: Boolean(r.executed),
+      tradingMode: r.tradingMode,
+      candleCloseTime: Number(r.candleCloseTime),
+      createdAt: Number(r.createdAt),
+    }));
   }
 
   async listShadow(limit = 50): Promise<

@@ -136,19 +136,20 @@ export class MarketOrchestrator {
         return;
       }
 
-      await this.persistDecision(candle, prediction, {
-        effectiveMinConfidence: gate.effectiveMinConfidence,
-        blockedBy: null,
-        wouldExecute: true,
-        executed: false,
-      });
-      const opened = await this.executeBuySignal(candle, prediction);
-      if (opened) {
+      const buyResult = await this.executeBuySignal(candle, prediction);
+      if (buyResult.ok) {
         await this.persistDecision(candle, prediction, {
           effectiveMinConfidence: gate.effectiveMinConfidence,
           blockedBy: null,
           wouldExecute: true,
           executed: true,
+        });
+      } else {
+        await this.persistDecision(candle, prediction, {
+          effectiveMinConfidence: gate.effectiveMinConfidence,
+          blockedBy: buyResult.blockedBy,
+          wouldExecute: true,
+          executed: false,
         });
       }
       return;
@@ -389,10 +390,33 @@ export class MarketOrchestrator {
     return prediction;
   }
 
+  private mapCanOpenBlockedBy(
+    reason?: string,
+  ): Exclude<MlBlockedBy, null> {
+    switch (reason) {
+      case 'TRADING_HALTED':
+        return 'trading_halted';
+      case 'POSITION_ALREADY_OPEN':
+        return 'holding';
+      case 'MAX_OPEN_POSITIONS':
+        return 'max_positions';
+      case 'MAX_DAILY_TRADES':
+        return 'max_trades';
+      case 'MAX_DAILY_LOSS':
+        return 'daily_loss';
+      case 'INSUFFICIENT_BALANCE':
+        return 'insufficient_balance';
+      case 'MAX_DRAWDOWN':
+        return 'drawdown';
+      default:
+        return 'risk';
+    }
+  }
+
   private async executeBuySignal(
     candle: CandleData,
     prediction: MlPrediction,
-  ): Promise<boolean> {
+  ): Promise<{ ok: true } | { ok: false; blockedBy: Exclude<MlBlockedBy, null> }> {
     const symbol = candle.symbol;
     const confidence = prediction.confidence;
     const algorithm =
@@ -408,14 +432,14 @@ export class MarketOrchestrator {
       this.logger.error(
         `[ORCHESTRATOR] Gagal mendapatkan saldo untuk eksekusi BUY ${symbol}`,
       );
-      return false;
+      return { ok: false, blockedBy: 'insufficient_balance' };
     }
 
     const drawdownOk =
       await this.positionManager.updateEquityAndCheckDrawdown(balance.total);
     if (!drawdownOk) {
       this.logger.warn(`[ORCHESTRATOR] Drawdown breach — skip BUY ${symbol}`);
-      return false;
+      return { ok: false, blockedBy: 'drawdown' };
     }
 
     const entryPrice = candle.close;
@@ -429,7 +453,7 @@ export class MarketOrchestrator {
       this.logger.warn(
         `[ORCHESTRATOR] Ukuran posisi tidak valid (${positionSize}) untuk ${symbol}`,
       );
-      return false;
+      return { ok: false, blockedBy: 'sizing' };
     }
 
     const gate = await this.positionManager.canOpenPosition(
@@ -442,7 +466,7 @@ export class MarketOrchestrator {
       this.logger.warn(
         `[ORCHESTRATOR] BUY ${symbol} ditolak pre-flight: ${gate.reason}`,
       );
-      return false;
+      return { ok: false, blockedBy: this.mapCanOpenBlockedBy(gate.reason) };
     }
 
     const orderResult = await this.executionService.executeMarketOrder(
@@ -453,7 +477,7 @@ export class MarketOrchestrator {
 
     if (!orderResult) {
       this.logger.error(`[ORCHESTRATOR] Order BUY ${symbol} gagal dieksekusi.`);
-      return false;
+      return { ok: false, blockedBy: 'exchange' };
     }
 
     const avgPrice =
@@ -481,9 +505,9 @@ export class MarketOrchestrator {
         `[ORCHESTRATOR] Posisi ${symbol} gagal tercatat setelah fill — mencoba flatten darurat`,
       );
       await this.executionService.closePosition(symbol, filledQty);
-      return false;
+      return { ok: false, blockedBy: 'ledger' };
     }
-    return true;
+    return { ok: true };
   }
 
   private async executeSellSignal(candle: CandleData, confidence: number) {
