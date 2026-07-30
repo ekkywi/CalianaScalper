@@ -374,7 +374,7 @@ export default function DashboardPage() {
                         </td>
                         <td className="py-3 pl-4 text-right">
                           <div className="flex items-center justify-end gap-1">
-                            <Link href={`/dashboard/${item.symbol}`} className="p-1.5 rounded text-slate-600 hover:text-sky-400 hover:bg-sky-500/10 transition-colors" title="Buka Grafik">
+                            <Link href={`/dashboard/${item.symbol}`} className="p-1.5 rounded text-slate-600 hover:text-sky-400 hover:bg-sky-500/10 transition-colors" title="Symbol Ops">
                               <ExternalLink className="w-3.5 h-3.5" />
                             </Link>
                             <button onClick={() => openDeleteDialog(item)} className="p-1.5 rounded text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="Hapus">

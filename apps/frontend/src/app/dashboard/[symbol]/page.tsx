@@ -1,13 +1,25 @@
 'use client';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
-import { createChart, IChartApi, ISeriesApi, CandlestickData, UTCTimestamp, LineData } from 'lightweight-charts';
+import {
+  createChart,
+  IChartApi,
+  IPriceLine,
+  ISeriesApi,
+  CandlestickData,
+  UTCTimestamp,
+  LineData,
+  LineStyle,
+} from 'lightweight-charts';
 import { fetchKlines, fetch24hrTicker } from '@/services/binance-rest';
 import type { KlineData } from '@/services/binance-rest';
+import { binanceTickerWS, type TickerData } from '@/services/binance-ws';
 import { socket } from '@/services/socket';
 import PriceFlash from '@/components/ui/PriceFlash';
+import SymbolOpsPanel from '@/components/symbol/SymbolOpsPanel';
+import { useSymbolOps } from '@/components/symbol/useSymbolOps';
 import Link from 'next/link';
-import { ArrowLeft, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react';
+import { ArrowLeft, TrendingUp, TrendingDown, RefreshCw, AlertTriangle, CheckCircle } from 'lucide-react';
 
 const TIMEFRAMES = [
   { label: '1m', value: '1m' },
@@ -79,12 +91,14 @@ function calculateEMA(data: CandlestickData[], period: number): (LineData | null
 export default function ChartPage() {
   const params = useParams();
   const symbol = (params.symbol as string).toUpperCase();
+  const ops = useSymbolOps(symbol);
 
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const indicatorSeriesRef = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
+  const priceLinesRef = useRef<{ entry?: IPriceLine; sl?: IPriceLine; tp?: IPriceLine }>({});
   const klineWsRef = useRef<WebSocket | null>(null);
   const chartAliveRef = useRef(false);
   const activeIndicatorsRef = useRef<Set<string>>(new Set());
@@ -92,13 +106,13 @@ export default function ChartPage() {
   const [timeframe, setTimeframe] = useState('15m');
   const [activeIndicators, setActiveIndicators] = useState<Set<string>>(new Set());
   const [lastPrice, setLastPrice] = useState<number>(0);
-  const [priceChange, setPriceChange] = useState<number>(0);
   const [priceChangePercent, setPriceChangePercent] = useState<number>(0);
   const [high24h, setHigh24h] = useState<number>(0);
   const [low24h, setLow24h] = useState<number>(0);
   const [volume24h, setVolume24h] = useState<number>(0);
   const [candleData, setCandleData] = useState<CandlestickData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [chartReady, setChartReady] = useState(false);
 
   activeIndicatorsRef.current = activeIndicators;
 
@@ -128,15 +142,66 @@ export default function ChartPage() {
     try {
       const data = await fetch24hrTicker(symbol);
       setLastPrice(parseFloat(data.c) || 0);
-      setPriceChange(parseFloat(data.p) || 0);
       setPriceChangePercent(parseFloat(data.P) || 0);
       setHigh24h(parseFloat(data.h) || 0);
       setLow24h(parseFloat(data.l) || 0);
-      setVolume24h(parseFloat(data.v) || 0);
+      // Prefer quote volume (USDT) so the $ formatting is meaningful
+      const quoteVol = parseFloat(data.q);
+      setVolume24h(Number.isFinite(quoteVol) && quoteVol > 0 ? quoteVol : parseFloat(data.v) || 0);
     } catch (err) {
       console.error('Failed to fetch ticker data:', err);
     }
   }, [symbol]);
+
+  const applyTickerStats = useCallback((ticker: TickerData) => {
+    if (ticker.symbol !== symbol) return;
+    if (Number.isFinite(ticker.lastPrice) && ticker.lastPrice > 0) {
+      setLastPrice(ticker.lastPrice);
+    }
+    if (Number.isFinite(ticker.priceChangePercent)) {
+      setPriceChangePercent(ticker.priceChangePercent);
+    }
+    if (Number.isFinite(ticker.high24h) && ticker.high24h > 0) {
+      setHigh24h(ticker.high24h);
+    }
+    if (Number.isFinite(ticker.low24h) && ticker.low24h > 0) {
+      setLow24h(ticker.low24h);
+    }
+    const vol =
+      Number.isFinite(ticker.quoteVolume24h) && ticker.quoteVolume24h > 0
+        ? ticker.quoteVolume24h
+        : ticker.volume24h;
+    if (Number.isFinite(vol) && vol > 0) {
+      setVolume24h(vol);
+    }
+  }, [symbol]);
+
+  // Live 24h stats via shared Binance ticker WS (REST often blocked in browser)
+  useEffect(() => {
+    const unsub = binanceTickerWS.subscribe(symbol, applyTickerStats);
+    binanceTickerWS.connect();
+    return () => {
+      unsub();
+    };
+  }, [symbol, applyTickerStats]);
+
+  const clearPriceLines = useCallback(() => {
+    const series = candleSeriesRef.current;
+    if (!series) {
+      priceLinesRef.current = {};
+      return;
+    }
+    (['entry', 'sl', 'tp'] as const).forEach((key) => {
+      const line = priceLinesRef.current[key];
+      if (!line) return;
+      try {
+        series.removePriceLine(line);
+      } catch {
+        // disposed
+      }
+    });
+    priceLinesRef.current = {};
+  }, []);
 
   const fetchCandleData = useCallback(async (tf: string) => {
     setIsLoading(true);
@@ -255,6 +320,7 @@ export default function ChartPage() {
 
     chartRef.current = chart;
     chartAliveRef.current = true;
+    setChartReady(true);
 
     const handleResize = () => {
       if (!chartAliveRef.current || !chartContainerRef.current) return;
@@ -286,6 +352,8 @@ export default function ChartPage() {
     return () => {
       window.removeEventListener('resize', handleResize);
       chartAliveRef.current = false;
+      setChartReady(false);
+      clearPriceLines();
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
       indicatorSeriesRef.current.clear();
@@ -296,7 +364,50 @@ export default function ChartPage() {
         // already disposed
       }
     };
-  }, [safeChartCall]);
+  }, [safeChartCall, clearPriceLines]);
+
+  // Entry / SL / TP overlays from open position
+  useEffect(() => {
+    if (!chartReady || !chartAliveRef.current || !candleSeriesRef.current) return;
+
+    clearPriceLines();
+    const pos = ops.position;
+    if (!pos) return;
+
+    const series = candleSeriesRef.current;
+    safeChartCall(() => {
+      if (Number.isFinite(pos.entryPrice) && pos.entryPrice > 0) {
+        priceLinesRef.current.entry = series.createPriceLine({
+          price: pos.entryPrice,
+          color: '#38bdf8',
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: 'Entry',
+        });
+      }
+      if (Number.isFinite(pos.stopLoss) && pos.stopLoss > 0) {
+        priceLinesRef.current.sl = series.createPriceLine({
+          price: pos.stopLoss,
+          color: '#ef4444',
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: 'SL',
+        });
+      }
+      if (Number.isFinite(pos.takeProfit) && pos.takeProfit > 0) {
+        priceLinesRef.current.tp = series.createPriceLine({
+          price: pos.takeProfit,
+          color: '#10b981',
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: 'TP',
+        });
+      }
+    });
+  }, [ops.position, chartReady, clearPriceLines, safeChartCall]);
 
   // Load data when timeframe or symbol changes
   useEffect(() => {
@@ -503,145 +614,176 @@ export default function ChartPage() {
   const isPositiveChange = priceChangePercent >= 0;
   const changeColor = isPositiveChange ? 'text-emerald-400' : 'text-red-400';
 
+  const pairReady = ops.pair && !ops.pair.blockBuy;
+  const pairBlocked = ops.pair?.blockBuy;
+
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-slate-100">
       <div className="sticky top-0 z-10 bg-[#0a0a0f]/95 backdrop-blur-sm border-b border-slate-800/50">
-        <div className="px-4 lg:px-6 py-2 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="px-4 lg:px-6 py-2 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <Link
               href="/dashboard"
-              className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800 transition-colors"
+              className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
             >
               <ArrowLeft className="w-4 h-4" />
             </Link>
-            <div>
-              <h1 className="text-sm font-semibold text-white">
-                {symbol.replace('USDT', '')}
-                <span className="text-slate-500 font-normal ml-1">/USDT</span>
-              </h1>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm font-semibold text-white truncate">
+                  {symbol.replace('USDT', '')}
+                  <span className="text-slate-500 font-normal ml-1">/USDT</span>
+                </h1>
+                {ops.position && (
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-400 shrink-0">
+                    LONG
+                  </span>
+                )}
+                {pairBlocked && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 shrink-0">
+                    <AlertTriangle className="w-2.5 h-2.5" />
+                    BUY blocked
+                  </span>
+                )}
+                {pairReady && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 shrink-0">
+                    <CheckCircle className="w-2.5 h-2.5" />
+                    Ready
+                  </span>
+                )}
+              </div>
+              <p className="text-[10px] text-slate-500 truncate">
+                Bot TF 15m
+                {ops.prediction
+                  ? ` · last signal ${ops.prediction.signal} (${(ops.prediction.confidence * 100).toFixed(0)}%)`
+                  : ''}
+              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className="text-right">
-              <PriceFlash value={lastPrice}>
-                <span className="text-lg font-semibold text-white tabular-nums">
-                  {hasPriceData ? `$${formatPrice(lastPrice)}` : '--'}
+          <div className="text-right shrink-0">
+            <PriceFlash value={lastPrice}>
+              <span className="text-lg font-semibold text-white tabular-nums">
+                {hasPriceData ? `$${formatPrice(lastPrice)}` : '--'}
+              </span>
+            </PriceFlash>
+            {hasPriceData && (
+              <div className={`flex items-center justify-end gap-1 text-xs font-medium ${changeColor} mt-0.5`}>
+                {isPositiveChange ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                <span className="tabular-nums">
+                  {priceChangePercent >= 0 ? '+' : ''}
+                  {priceChangePercent.toFixed(2)}%
                 </span>
-              </PriceFlash>
-              {hasPriceData && (
-                <div className={`flex items-center gap-1 text-xs font-medium ${changeColor} mt-0.5`}>
-                  {isPositiveChange ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                  <span className="tabular-nums">
-                    {priceChangePercent >= 0 ? '+' : ''}
-                    {priceChangePercent.toFixed(2)}%
-                  </span>
-                </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
       <div className="px-4 lg:px-6 py-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-1 bg-slate-900 rounded-lg p-0.5 border border-slate-800">
-            {TIMEFRAMES.map((tf) => (
-              <button
-                key={tf.value}
-                onClick={() => {
-                  setTimeframe(tf.value);
-                  clearIndicatorSeries();
-                  setActiveIndicators(new Set());
-                }}
-                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                  timeframe === tf.value
-                    ? 'bg-sky-600 text-white'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                {tf.label}
-              </button>
-            ))}
-          </div>
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
+          <div className="min-w-0 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1 bg-slate-900 rounded-lg p-0.5 border border-slate-800 overflow-x-auto">
+                {TIMEFRAMES.map((tf) => (
+                  <button
+                    key={tf.value}
+                    type="button"
+                    onClick={() => {
+                      setTimeframe(tf.value);
+                      clearIndicatorSeries();
+                      setActiveIndicators(new Set());
+                    }}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                      timeframe === tf.value
+                        ? 'bg-sky-600 text-white'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {tf.label}
+                  </button>
+                ))}
+              </div>
 
-          <div className="flex items-center gap-1">
-            {INDICATORS.map((ind) => (
-              <button
-                key={ind.value}
-                onClick={() => toggleIndicator(ind.value)}
-                className={`px-2 py-1 text-[10px] font-medium rounded-md transition-colors border ${
-                  activeIndicators.has(ind.value)
-                    ? 'bg-slate-800 text-white border-slate-700'
-                    : 'text-slate-500 hover:text-slate-300 border-transparent hover:border-slate-800'
-                }`}
-                style={{
-                  borderColor: activeIndicators.has(ind.value) ? ind.color : undefined,
-                  color: activeIndicators.has(ind.value) ? ind.color : undefined,
-                }}
-              >
-                {ind.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="relative">
-          {isLoading && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm rounded-xl">
-              <div className="flex flex-col items-center gap-2">
-                <RefreshCw className="w-5 h-5 text-sky-400 animate-spin" />
-                <span className="text-xs text-slate-400">Memuat data...</span>
+              <div className="flex items-center gap-1">
+                {INDICATORS.map((ind) => (
+                  <button
+                    key={ind.value}
+                    type="button"
+                    onClick={() => toggleIndicator(ind.value)}
+                    className={`px-2 py-1 text-[10px] font-medium rounded-md transition-colors border ${
+                      activeIndicators.has(ind.value)
+                        ? 'bg-slate-800 text-white border-slate-700'
+                        : 'text-slate-500 hover:text-slate-300 border-transparent hover:border-slate-800'
+                    }`}
+                    style={{
+                      borderColor: activeIndicators.has(ind.value) ? ind.color : undefined,
+                      color: activeIndicators.has(ind.value) ? ind.color : undefined,
+                    }}
+                  >
+                    {ind.label}
+                  </button>
+                ))}
               </div>
             </div>
-          )}
-          <div
-            ref={chartContainerRef}
-            className="w-full min-h-[520px] bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl"
-          />
-        </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
-          <StatBox label="Harga Terkini" value={hasPriceData ? `$${formatPrice(lastPrice)}` : '--'} color="text-white" />
-          <StatBox
-            label="Perubahan 24j"
-            value={hasPriceData ? `${priceChangePercent >= 0 ? '+' : ''}${priceChangePercent.toFixed(2)}%` : '--'}
-            color={changeColor}
-          />
-          <StatBox
-            label="High 24j"
-            value={Number.isFinite(high24h) && high24h > 0 ? `$${formatPrice(high24h)}` : '--'}
-            color="text-slate-300"
-          />
-          <StatBox
-            label="Low 24j"
-            value={Number.isFinite(low24h) && low24h > 0 ? `$${formatPrice(low24h)}` : '--'}
-            color="text-slate-300"
-          />
-          <StatBox
-            label="Volume 24j"
-            value={Number.isFinite(volume24h) && volume24h > 0 ? formatVolume(volume24h) : '--'}
-            color="text-slate-300"
-          />
-          <StatBox
-            label="Harga Buka 24j"
-            value={
-              candleData.length > 0 && Number.isFinite(candleData[0]?.open)
-                ? `$${formatPrice(candleData[0].open)}`
-                : '--'
-            }
-            color="text-slate-300"
-          />
-          <StatBox
-            label="Range 24j"
-            value={
-              Number.isFinite(high24h) && Number.isFinite(low24h) && low24h > 0
-                ? `${(((high24h - low24h) / low24h) * 100).toFixed(2)}%`
-                : '--'
-            }
-            color="text-slate-300"
-          />
-          <StatBox label="Symbol" value={symbol} color="text-slate-300" />
+            <div className="relative">
+              {isLoading && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm rounded-xl">
+                  <div className="flex flex-col items-center gap-2">
+                    <RefreshCw className="w-5 h-5 text-sky-400 animate-spin" />
+                    <span className="text-xs text-slate-400">Memuat data...</span>
+                  </div>
+                </div>
+              )}
+              <div
+                ref={chartContainerRef}
+                className="w-full min-h-[520px] bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl"
+              />
+              {ops.position && (
+                <div className="absolute bottom-3 left-3 flex items-center gap-2 text-[10px] pointer-events-none">
+                  <span className="px-1.5 py-0.5 rounded bg-slate-950/80 text-sky-400 border border-slate-700/50">
+                    Entry
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded bg-slate-950/80 text-red-400 border border-slate-700/50">
+                    SL
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded bg-slate-950/80 text-emerald-400 border border-slate-700/50">
+                    TP
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <StatBox
+                label="24h Change"
+                value={
+                  hasPriceData
+                    ? `${priceChangePercent >= 0 ? '+' : ''}${priceChangePercent.toFixed(2)}%`
+                    : '--'
+                }
+                color={changeColor}
+              />
+              <StatBox
+                label="High 24h"
+                value={Number.isFinite(high24h) && high24h > 0 ? `$${formatPrice(high24h)}` : '--'}
+                color="text-slate-300"
+              />
+              <StatBox
+                label="Low 24h"
+                value={Number.isFinite(low24h) && low24h > 0 ? `$${formatPrice(low24h)}` : '--'}
+                color="text-slate-300"
+              />
+              <StatBox
+                label="Volume 24h"
+                value={Number.isFinite(volume24h) && volume24h > 0 ? formatVolume(volume24h) : '--'}
+                color="text-slate-300"
+              />
+            </div>
+          </div>
+
+          <SymbolOpsPanel symbol={symbol} ops={ops} lastPrice={lastPrice} />
         </div>
       </div>
     </div>
